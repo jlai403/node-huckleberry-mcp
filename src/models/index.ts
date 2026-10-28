@@ -30,6 +30,20 @@ export type {
 export { PumpInterval, PumpTimer, PumpDocument } from "./pump.js";
 export type { PumpIntervalParsed, PumpTimerParsed, PumpDocumentParsed } from "./pump.js";
 
+export {
+  ACTIVITY_MODES,
+  ActivityModeSchema,
+  ActivityInterval,
+  ActivityTimerEntry,
+  ActivityDocument,
+} from "./activity.js";
+export type {
+  ActivityMode,
+  ActivityIntervalParsed,
+  ActivityTimerEntryParsed,
+  ActivityDocumentParsed,
+} from "./activity.js";
+
 export { DiaperInterval } from "./diaper.js";
 export type { DiaperIntervalParsed } from "./diaper.js";
 
