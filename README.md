@@ -36,17 +36,20 @@ npm run build
 node dist/index.js
 ```
 
-## HTTP transport
+### HTTP transport
 
-For clients that cannot spawn a stdio child process (server-side agents,
-Durable Object / worker runtimes), run the streamable-HTTP server instead:
+For clients that cannot spawn a stdio child process (server-side agents, Durable
+Object / worker runtimes), run with `--transport http`:
 
 ```bash
-node dist/http.js      # or: npm run start:http
+node dist/index.js --transport http --port 8085 --host 0.0.0.0
+# or: npm run start:http
 ```
 
-- Listens on `0.0.0.0:8085` by default (`HUCKLEBERRY_MCP_PORT`, `HUCKLEBERRY_MCP_HOST`).
-- Stateless protocol mode: no server-issued sessions; safe for concurrent clients; no server-initiated SSE (GET/DELETE requests receive `405`).
+- `--transport` defaults to `stdio`. `--port` (default `8085`) and `--host`
+  (default `0.0.0.0`) apply to HTTP mode; env fallbacks
+  `HUCKLEBERRY_MCP_PORT` / `HUCKLEBERRY_MCP_HOST`.
+- Stateless protocol mode: no server-issued sessions; safe for concurrent clients; no server-initiated SSE (GET/DELETE receive `405`).
 - `GET /health` returns `200 {"ok":true}` for load-balancer checks.
 - If `HUCKLEBERRY_MCP_TOKEN` is set, requests must send `Authorization: Bearer <token>` (otherwise `401`). Unset = open endpoint with a startup warning.
 
