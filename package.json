@@ -53,10 +53,12 @@
     "inspect:schema": "node scripts/inspect-schema.mjs",
     "dev": "tsx src/index.ts",
     "smoke": "npm run build && npm test -- integration.test.ts",
-    "prepublishOnly": "npm run build && npm test"
+    "prepublishOnly": "npm run build && npm test",
+    "start": "node dist/index.js",
+    "start:http": "node dist/index.js --transport http"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^0.6.0",
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "firebase": "^10.8.0",
     "zod": "^3.22.4"
   },
