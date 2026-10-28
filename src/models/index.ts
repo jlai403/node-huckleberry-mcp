@@ -7,8 +7,8 @@ export type { FirebaseUserDocumentParsed, ChildListEntryParsed } from "./user.js
 export { ChildDocument } from "./child.js";
 export type { ChildDocumentParsed } from "./child.js";
 
-export { SleepInterval } from "./sleep.js";
-export type { SleepIntervalParsed } from "./sleep.js";
+export { SleepInterval, SleepTimer, SleepDocument } from "./sleep.js";
+export type { SleepIntervalParsed, SleepTimerParsed, SleepDocumentParsed } from "./sleep.js";
 
 export { NursingInterval, BottleInterval, SolidsInterval, FeedingInterval } from "./feed.js";
 export type {
