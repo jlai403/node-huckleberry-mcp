@@ -36,6 +36,34 @@ npm run build
 node dist/index.js
 ```
 
+## HTTP transport
+
+For clients that cannot spawn a stdio child process (server-side agents,
+Durable Object / worker runtimes), run the streamable-HTTP server instead:
+
+```bash
+node dist/http.js      # or: npm run start:http
+```
+
+- Listens on `0.0.0.0:8085` by default (`HUCKLEBERRY_MCP_PORT`, `HUCKLEBERRY_MCP_HOST`).
+- Stateless protocol mode: no server-issued sessions; safe for concurrent clients; no server-initiated SSE (GET/DELETE requests receive `405`).
+- `GET /health` returns `200 {"ok":true}` for load-balancer checks.
+- If `HUCKLEBERRY_MCP_TOKEN` is set, requests must send `Authorization: Bearer <token>` (otherwise `401`). Unset = open endpoint with a startup warning.
+
+Client configuration (streamable-HTTP transport):
+
+```json
+{
+  "mcpServers": {
+    "huckleberry": {
+      "transport": "http",
+      "url": "http://homelab-host:8085/mcp",
+      "headers": { "Authorization": "Bearer <HUCKLEBERRY_MCP_TOKEN>" }
+    }
+  }
+}
+```
+
 ## Configuration
 
 ### Environment Variables
