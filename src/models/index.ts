@@ -32,6 +32,7 @@ export type { PumpIntervalParsed, PumpTimerParsed, PumpDocumentParsed } from "./
 
 export {
   ACTIVITY_MODES,
+  ACTIVITY_LAST_FIELD_BY_MODE,
   ActivityModeSchema,
   ActivityInterval,
   ActivityTimerEntry,
