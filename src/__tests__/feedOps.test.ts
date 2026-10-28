@@ -56,6 +56,11 @@ import {
   switchNursingSide,
   cancelNursing,
   completeNursing,
+  startPump,
+  pausePump,
+  resumePump,
+  cancelPump,
+  completePump,
 } from "../client/feedOps.js";
 
 const OFFSET = -480;
@@ -75,7 +80,13 @@ function lastPrefs() {
   return (mockSetDoc.mock.calls[0][1] as { prefs: Record<string, unknown> }).prefs;
 }
 
-beforeEach(() => vi.clearAllMocks());
+// clearAllMocks clears calls/results but keeps queued mockResolvedValueOnce
+// entries — drain the queue so stale doc fixtures never leak across tests.
+beforeEach(() => {
+  vi.clearAllMocks();
+  mockGetDoc.mockReset();
+  mockGetDoc.mockResolvedValue({ exists: () => false, data: () => undefined });
+});
 
 describe("feedOps writes", () => {
   it("logNursing writes to feed/intervals with seconds-duration prefs (no /1000)", async () => {
@@ -490,5 +501,154 @@ describe("cancelNursing / completeNursing", () => {
     await expect(
       completeNursing(client, "cid", { end: new Date(Date.now() - 10_000) }),
     ).rejects.toThrow("end must not precede");
+  });
+});
+
+// ── Live pump timer ──────────────────────────────────────────────────────────
+
+function pumpTimerDoc(timer: Record<string, unknown>) {
+  return { exists: () => true, data: () => ({ timer }) };
+}
+
+describe("pump timer ops", () => {
+  it("startPump creates an ms-based timer; repeat start moves it", async () => {
+    await startPump(client, "cid", { time: new Date(Date.now() - 1000) });
+
+    const [ref, patch] = mockUpdateDoc.mock.calls[0] as [
+      { path: string },
+      { timer: Record<string, unknown> },
+    ];
+    expect(ref.path).toBe("pump/cid");
+    expect(patch.timer).toMatchObject({ active: true, paused: false });
+    expect(patch.timer.uuid).toHaveLength(16);
+
+    mockGetDoc.mockResolvedValueOnce(
+      pumpTimerDoc({ active: true, paused: false, startTime: Date.now() - 5000, uuid: "sess" }),
+    );
+    const result = await startPump(client, "cid", { time: new Date(Date.now()) });
+    expect(result).toEqual({ moved: true });
+    const [ref2, patch2] = mockUpdateDoc.mock.calls.at(-1) as [
+      { path: string },
+      Record<string, unknown>,
+    ];
+    expect(ref2.path).toBe("pump/cid");
+    expect(patch2["timer.startTime"]).toEqual(expect.any(Number));
+    expect(patch2.timer).toBeUndefined();
+  });
+
+  it("startPump guards a moved start after a paused endTime", async () => {
+    mockGetDoc.mockResolvedValueOnce(
+      pumpTimerDoc({ active: true, paused: true, startTime: 5, endTime: Date.now() + 60_000 }),
+    );
+    await expect(
+      startPump(client, "cid", { time: new Date(Date.now() + 120_000) }),
+    ).rejects.toThrow("paused pump end time");
+  });
+
+  it("pause stamps endTime; resume deletes it; cancel resets with uuid kept", async () => {
+    mockGetDoc.mockResolvedValueOnce(pumpTimerDoc({ active: true, paused: false, startTime: 5 }));
+    await pausePump(client, "cid");
+    let { patch } = lastUpdateCall();
+    expect(patch["timer.paused"]).toBe(true);
+    expect(patch["timer.endTime"]).toEqual(expect.any(Number));
+
+    mockGetDoc.mockResolvedValueOnce(
+      pumpTimerDoc({ active: true, paused: true, endTime: 42, startTime: 5 }),
+    );
+    await resumePump(client, "cid");
+    ({ patch } = lastUpdateCall());
+    expect(patch["timer.paused"]).toBe(false);
+    expect(patch["timer.endTime"]).toEqual({ __sentinel: "DELETE_FIELD" });
+
+    mockGetDoc.mockResolvedValueOnce(
+      pumpTimerDoc({ active: true, paused: false, startTime: 5, uuid: "sess" }),
+    );
+    await cancelPump(client, "cid");
+    ({ patch } = lastUpdateCall());
+    expect(patch.timer).toMatchObject({ active: false, paused: false, uuid: "sess" });
+  });
+
+  it("completePump with totalAmount splits evenly and writes entryMode total", async () => {
+    const startMs = Date.now() - 120_000;
+    mockGetDoc.mockResolvedValueOnce(
+      pumpTimerDoc({ active: true, paused: false, startTime: startMs, uuid: "sess" }),
+    );
+    const saved = await completePump(client, "cid", { totalAmount: 120, units: "ml" });
+
+    expect(saved?.entryMode).toBe("total");
+    expect(saved?.durationSec).toBeGreaterThanOrEqual(115);
+    const [colRef, body] = mockAddDoc.mock.calls.at(-1) as [
+      { path: string },
+      Record<string, unknown>,
+    ];
+    expect(colRef.path).toBe("pump/cid/intervals");
+    expect(body).toMatchObject({
+      entryMode: "total",
+      leftAmount: 60,
+      rightAmount: 60,
+      units: "ml",
+    });
+  });
+
+  it("completePump with left/right uses letright mode and rejects contradictions", async () => {
+    mockGetDoc.mockResolvedValueOnce(
+      pumpTimerDoc({ active: true, paused: false, startTime: Date.now() - 60_000 }),
+    );
+    const saved = await completePump(client, "cid", {
+      leftAmount: 30,
+      rightAmount: 45,
+      units: "oz",
+    });
+    expect(saved?.entryMode).toBe("leftright");
+
+    mockGetDoc.mockResolvedValueOnce(
+      pumpTimerDoc({ active: true, paused: false, startTime: Date.now() - 60_000 }),
+    );
+    await expect(completePump(client, "cid", { leftAmount: 30, units: "ml" })).rejects.toThrow(
+      "both leftAmount and rightAmount",
+    );
+
+    mockGetDoc.mockResolvedValueOnce(
+      pumpTimerDoc({ active: true, paused: false, startTime: Date.now() - 60_000 }),
+    );
+    await expect(
+      completePump(client, "cid", {
+        totalAmount: 10,
+        leftAmount: 30,
+        rightAmount: 30,
+        units: "ml",
+      }),
+    ).rejects.toThrow("not both");
+  });
+
+  it("completePump honors the paused endTime default and rejects end<start", async () => {
+    const startMs = Date.now() - 300_000;
+    mockGetDoc.mockResolvedValueOnce(
+      pumpTimerDoc({
+        active: true,
+        paused: true,
+        startTime: startMs,
+        endTime: Date.now() - 60_000,
+      }),
+    );
+    const saved = await completePump(client, "cid", { totalAmount: 10, units: "ml" });
+    expect(saved?.durationSec).toBeGreaterThanOrEqual(235);
+
+    mockGetDoc.mockResolvedValueOnce(
+      pumpTimerDoc({ active: true, paused: false, startTime: Date.now() }),
+    );
+    await expect(
+      completePump(client, "cid", {
+        totalAmount: 10,
+        units: "ml",
+        end: new Date(Date.now() - 5_000),
+      }),
+    ).rejects.toThrow("end must not precede start");
+  });
+
+  it("completePump is a no-op when inactive", async () => {
+    mockGetDoc.mockResolvedValueOnce(pumpTimerDoc({ active: false }));
+    const saved = await completePump(client, "cid", { totalAmount: 10, units: "ml" });
+    expect(saved).toBeNull();
   });
 });

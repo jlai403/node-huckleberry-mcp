@@ -27,8 +27,8 @@ export type {
   FeedDocumentParsed,
 } from "./feed.js";
 
-export { PumpInterval } from "./pump.js";
-export type { PumpIntervalParsed } from "./pump.js";
+export { PumpInterval, PumpTimer, PumpDocument } from "./pump.js";
+export type { PumpIntervalParsed, PumpTimerParsed, PumpDocumentParsed } from "./pump.js";
 
 export { DiaperInterval } from "./diaper.js";
 export type { DiaperIntervalParsed } from "./diaper.js";
