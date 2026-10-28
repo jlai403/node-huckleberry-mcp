@@ -57,3 +57,35 @@ export type NursingIntervalParsed = z.infer<typeof NursingInterval>;
 export type BottleIntervalParsed = z.infer<typeof BottleInterval>;
 export type SolidsIntervalParsed = z.infer<typeof SolidsInterval>;
 export type FeedingIntervalParsed = z.infer<typeof FeedingInterval>;
+
+// Live nursing timer (feed/{cid}.timer). Read model — lenient; states are
+// re-validated by the timer ops before acting.
+// NOTE: timerStartTime/feedStartTime are epoch SECONDS here (sleep/pump use ms).
+export const FeedTimer = z
+  .object({
+    active: z.boolean().default(false),
+    paused: z.boolean().default(false),
+    feedStartTime: z.number().optional(),
+    timerStartTime: z.number().optional(),
+    leftDuration: z.number().optional(),
+    rightDuration: z.number().optional(),
+    // "none" marks a paused/transitioning segment (app convention).
+    lastSide: z.string().optional(),
+    activeSide: z.string().optional(),
+    uuid: z.string().optional(),
+    timestamp: z.object({ seconds: z.number() }).passthrough().optional(),
+    local_timestamp: z.number().optional(),
+  })
+  .passthrough();
+
+export type FeedTimerParsed = z.infer<typeof FeedTimer>;
+
+// feed/{cid} parent document as the timer tools see it.
+export const FeedDocument = z
+  .object({
+    timer: FeedTimer.optional(),
+    prefs: z.object({}).passthrough().optional(),
+  })
+  .passthrough();
+
+export type FeedDocumentParsed = z.infer<typeof FeedDocument>;
