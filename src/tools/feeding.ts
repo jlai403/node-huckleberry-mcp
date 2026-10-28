@@ -12,9 +12,206 @@ import {
   editPump,
   deleteFeed,
   deletePump,
+  getFeedDoc,
+  startNursing,
+  pauseNursing,
+  resumeNursing,
+  switchNursingSide,
+  cancelNursing,
+  completeNursing,
 } from "../client/index.js";
 
-// T2.5: Feeding Tools (7 tools)
+const sideSchema = z.enum(["left", "right"]);
+type Side = z.infer<typeof sideSchema>;
+
+// T2.5: Feeding Tools (log/read/edit/delete + live nursing timer)
+
+// get_feed — read the live feeding document and current nursing timer state
+registerTool(
+  "get_feed",
+  "Get the child's feed document and current nursing timer state (active/paused/side/durations)",
+  z.object({
+    child_uid: z.string().min(1, "child_uid is required"),
+  }),
+  async (input) => {
+    const client = await getClient();
+    const { timer } = await getFeedDoc(client, input.child_uid);
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify(
+            {
+              timer: timer
+                ? {
+                    active: timer.active,
+                    paused: timer.paused,
+                    session_start_epoch_sec: timer.feedStartTime ?? null,
+                    segment_start_epoch_sec: timer.timerStartTime ?? null,
+                    left_duration_sec: timer.leftDuration ?? null,
+                    right_duration_sec: timer.rightDuration ?? null,
+                    active_side: timer.activeSide ?? null,
+                    last_side: timer.lastSide ?? null,
+                    session_uuid: timer.uuid ?? null,
+                  }
+                : null,
+            },
+            null,
+            2,
+          ),
+        },
+      ],
+    };
+  },
+);
+
+// start_nursing — start the nursing timer (or move an active session's start)
+registerTool(
+  "start_nursing",
+  "Start the breastfeeding timer. Pass `start` (epoch seconds) + `side`; on an already-running session this moves its start instead of starting a new one.",
+  z.object({
+    child_uid: z.string().min(1, "child_uid is required"),
+    side: sideSchema.default("left"),
+    start: z.number().min(0).optional(),
+  }),
+  async (input) => {
+    const client = await getClient();
+    const result = await startNursing(client, input.child_uid, {
+      side: input.side as Side,
+      time: input.start !== undefined ? new Date(input.start * 1000) : undefined,
+    });
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify(
+            result.moved
+              ? { status: "moved", message: "Nursing already active — session start shifted" }
+              : { status: "started", side: input.side },
+            null,
+            2,
+          ),
+        },
+      ],
+    };
+  },
+);
+
+// pause_nursing — bank elapsed into the active side and pause
+registerTool(
+  "pause_nursing",
+  "Pause the nursing timer; elapsed time banks into the active side's duration",
+  z.object({
+    child_uid: z.string().min(1, "child_uid is required"),
+  }),
+  async (input) => {
+    const client = await getClient();
+    await pauseNursing(client, input.child_uid);
+    return {
+      content: [{ type: "text", text: JSON.stringify({ status: "paused" }, null, 2) }],
+    };
+  },
+);
+
+// resume_nursing — resume on a side (defaults to lastUsed)
+registerTool(
+  "resume_nursing",
+  "Resume a paused nursing timer, on `side` or the last used side",
+  z.object({
+    child_uid: z.string().min(1, "child_uid is required"),
+    side: sideSchema.optional(),
+  }),
+  async (input) => {
+    const client = await getClient();
+    await resumeNursing(client, input.child_uid, { side: input.side as Side | undefined });
+    return {
+      content: [{ type: "text", text: JSON.stringify({ status: "resumed" }, null, 2) }],
+    };
+  },
+);
+
+// switch_nursing_side — L↔R with banking
+registerTool(
+  "switch_nursing_side",
+  "Switch the nursing side (left ⇄ right); running elapsed banks into the previous side",
+  z.object({
+    child_uid: z.string().min(1, "child_uid is required"),
+    side: sideSchema.optional(), // override the natural L⇄R flip
+  }),
+  async (input) => {
+    const client = await getClient();
+    await switchNursingSide(client, input.child_uid, { side: input.side as Side | undefined });
+    return {
+      content: [{ type: "text", text: JSON.stringify({ status: "switched" }, null, 2) }],
+    };
+  },
+);
+
+// cancel_nursing — discard without saving
+registerTool(
+  "cancel_nursing",
+  "Cancel the running/paused nursing timer WITHOUT saving an entry",
+  z.object({
+    child_uid: z.string().min(1, "child_uid is required"),
+  }),
+  async (input) => {
+    const client = await getClient();
+    await cancelNursing(client, input.child_uid);
+    return {
+      content: [{ type: "text", text: JSON.stringify({ status: "cancelled" }, null, 2) }],
+    };
+  },
+);
+
+// complete_nursing — save a breast interval + reset
+registerTool(
+  "complete_nursing",
+  "Complete the nursing timer and save the session to history. `start` (epoch seconds) optionally corrects the saved interval start.",
+  z.object({
+    child_uid: z.string().min(1, "child_uid is required"),
+    start: z.number().min(0).optional(),
+    end: z.number().min(0).optional(),
+  }),
+  async (input) => {
+    const client = await getClient();
+    const saved = await completeNursing(client, input.child_uid, {
+      start: input.start,
+      end: input.end !== undefined ? new Date(input.end * 1000) : undefined,
+    });
+    if (!saved) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              { status: "noop", message: "No active nursing timer to complete" },
+              null,
+              2,
+            ),
+          },
+        ],
+      };
+    }
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify(
+            {
+              status: "completed",
+              start: saved.startSec,
+              left: saved.left,
+              right: saved.right,
+              total: saved.total,
+            },
+            null,
+            2,
+          ),
+        },
+      ],
+    };
+  },
+);
 
 // log_nursing — log a nursing session
 registerTool(

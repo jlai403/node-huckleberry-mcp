@@ -9,6 +9,7 @@ const {
   mockUpdateDoc,
   mockDeleteDoc,
   mockGetDocs,
+  mockGetDoc,
   mockCollection,
   mockDoc,
 } = vi.hoisted(() => ({
@@ -17,6 +18,7 @@ const {
   mockUpdateDoc: vi.fn(async () => undefined),
   mockDeleteDoc: vi.fn(async () => undefined),
   mockGetDocs: vi.fn(),
+  mockGetDoc: vi.fn(async () => ({ exists: () => false, data: () => undefined })),
   mockCollection: vi.fn((_db: unknown, ...seg: string[]) => ({ path: seg.join("/") })),
   mockDoc: vi.fn((_db: unknown, ...seg: string[]) => ({ path: seg.join("/") })),
 }));
@@ -29,6 +31,8 @@ vi.mock("firebase/firestore", () => ({
   updateDoc: mockUpdateDoc,
   deleteDoc: mockDeleteDoc,
   getDocs: mockGetDocs,
+  getDoc: mockGetDoc,
+  deleteField: () => ({ __sentinel: "DELETE_FIELD" }),
   query: (col: unknown) => col,
   orderBy: () => ({}),
   limit: () => ({}),
@@ -45,6 +49,13 @@ import {
   editPump,
   deleteFeed,
   deletePump,
+  getFeedDoc,
+  startNursing,
+  pauseNursing,
+  resumeNursing,
+  switchNursingSide,
+  cancelNursing,
+  completeNursing,
 } from "../client/feedOps.js";
 
 const OFFSET = -480;
@@ -240,5 +251,244 @@ describe("deleteFeed / deletePump", () => {
     expect((mockDeleteDoc.mock.calls[0][0] as { path: string }).path).toBe(
       "pump/cid/intervals/pump-1",
     );
+  });
+});
+
+// ── Live nursing timer ────────────────────────────────────────────────────────
+
+function feedTimerDoc(timer: Record<string, unknown>) {
+  return { exists: () => true, data: () => ({ timer }) };
+}
+
+function lastUpdateCall(): { path: string; patch: Record<string, unknown> } {
+  const [ref, patch] = mockUpdateDoc.mock.calls.at(-1) as [
+    { path: string },
+    Record<string, unknown>,
+  ];
+  return { path: ref.path, patch };
+}
+
+describe("getFeedDoc", () => {
+  it("returns null timer for a missing feed doc", async () => {
+    const got = await getFeedDoc(client, "cid");
+    expect(got.timer).toBeNull();
+  });
+
+  it("parses the timer (seconds-based)", async () => {
+    mockGetDoc.mockResolvedValueOnce(feedTimerDoc({ active: true, timerStartTime: 1000 }));
+    const got = await getFeedDoc(client, "cid");
+    expect(got.timer).toMatchObject({ active: true, timerStartTime: 1000 });
+  });
+});
+
+describe("startNursing", () => {
+  it("starts fresh with zeroed durations and defaults", async () => {
+    await startNursing(client, "cid", { side: "right", time: new Date(Date.now()) });
+
+    const [ref, patch] = mockSetDoc.mock.calls[0] as [
+      { path: string },
+      { timer: Record<string, unknown> },
+    ];
+    expect(ref.path).toBe("feed/cid");
+    expect(patch.timer).toMatchObject({
+      active: true,
+      paused: false,
+      leftDuration: 0,
+      rightDuration: 0,
+      lastSide: "left",
+      activeSide: "right",
+    });
+    expect(patch.timer.uuid).toHaveLength(16);
+  });
+
+  it("moves the session start on repeat start with explicit time", async () => {
+    mockGetDoc.mockResolvedValueOnce(
+      feedTimerDoc({ active: true, paused: false, feedStartTime: 1000, timerStartTime: 1000 }),
+    );
+    const result = await startNursing(client, "cid", { time: new Date(Date.now()) });
+
+    expect(result).toEqual({ moved: true });
+    const { patch } = lastUpdateCall();
+    expect(patch["timer.feedStartTime"]).toStrictEqual(expect.any(Number));
+    expect(patch["timer.timestamp"]).toEqual({ seconds: expect.any(Number) });
+  });
+
+  it("keeps the segment start when the shift would push it into the future", async () => {
+    mockGetDoc.mockResolvedValueOnce(
+      feedTimerDoc({
+        active: true,
+        paused: false,
+        feedStartTime: 1000,
+        timerStartTime: Date.now() / 1000 - 30,
+      }),
+    );
+    const result = await startNursing(client, "cid", { time: new Date(Date.now() + 3600_000) });
+
+    expect(result).toEqual({ moved: true });
+    const { patch } = lastUpdateCall();
+    // segment start ≈ unchanged (kept); session start moved forward
+    expect(patch["timer.timerStartTime"]).toBeLessThan(Date.now() / 1000);
+    expect(patch["timer.feedStartTime"]).toBeGreaterThan(Date.now() / 1000);
+  });
+});
+
+describe("pauseNursing / resumeNursing / switchNursingSide", () => {
+  it("pause banks elapsed into activeSide and clears activeSide", async () => {
+    mockGetDoc.mockResolvedValueOnce(
+      feedTimerDoc({
+        active: true,
+        paused: false,
+        timerStartTime: Date.now() / 1000 - 60,
+        leftDuration: 10,
+        rightDuration: 20,
+        activeSide: "right",
+      }),
+    );
+    await pauseNursing(client, "cid");
+
+    const { patch } = lastUpdateCall();
+    expect(patch["timer.paused"]).toBe(true);
+    expect(patch["timer.leftDuration"]).toBe(10);
+    expect(patch["timer.rightDuration"]).toBeGreaterThanOrEqual(79); // ~60s banked
+    expect(patch["timer.lastSide"]).toBe("right");
+    expect(patch["timer.activeSide"]).toEqual({ __sentinel: "DELETE_FIELD" });
+  });
+
+  it("resume resets segment start and marks transition lastSide none", async () => {
+    mockGetDoc.mockResolvedValueOnce(
+      feedTimerDoc({
+        active: true,
+        paused: true,
+        lastSide: "right",
+        leftDuration: 5,
+        rightDuration: 8,
+      }),
+    );
+    await resumeNursing(client, "cid");
+
+    const { patch } = lastUpdateCall();
+    expect(patch["timer.paused"]).toBe(false);
+    expect(patch["timer.activeSide"]).toBe("right"); // back to lastSide
+    expect(patch["timer.lastSide"]).toBe("none");
+    expect(typeof patch["timer.timerStartTime"]).toBe("number");
+  });
+
+  it("switch banks the running side and flips", async () => {
+    mockGetDoc.mockResolvedValueOnce(
+      feedTimerDoc({
+        active: true,
+        paused: false,
+        timerStartTime: Date.now() / 1000 - 30,
+        leftDuration: 0,
+        rightDuration: 0,
+        activeSide: "left",
+      }),
+    );
+    await switchNursingSide(client, "cid");
+
+    const { patch } = lastUpdateCall();
+    expect(patch["timer.activeSide"]).toBe("right");
+    expect(patch["timer.leftDuration"]).toBeGreaterThanOrEqual(29);
+    expect(patch["timer.rightDuration"]).toBe(0);
+  });
+
+  it("switch without elapsed banks nothing when paused", async () => {
+    mockGetDoc.mockResolvedValueOnce(
+      feedTimerDoc({
+        active: true,
+        paused: true,
+        timerStartTime: Date.now() / 1000 - 999,
+        leftDuration: 12,
+        rightDuration: 34,
+        lastSide: "left",
+      }),
+    );
+    await switchNursingSide(client, "cid");
+
+    const { patch } = lastUpdateCall();
+    expect(patch["timer.leftDuration"]).toBe(12);
+    expect(patch["timer.rightDuration"]).toBe(34);
+  });
+});
+
+describe("cancelNursing / completeNursing", () => {
+  it("cancel resets to the inactive zeroed timer, keeping uuid", async () => {
+    mockGetDoc.mockResolvedValueOnce(feedTimerDoc({ active: true, uuid: "sess" }));
+    await cancelNursing(client, "cid");
+
+    const { patch } = lastUpdateCall();
+    expect(patch.timer).toMatchObject({
+      active: false,
+      paused: false,
+      timerStartTime: null,
+      leftDuration: 0,
+      rightDuration: 0,
+      lastSide: "left",
+    });
+    expect((patch.timer as Record<string, unknown>).uuid).toBe("sess");
+  });
+
+  it("complete banks the running segment, writes a breast interval + prefs, resets timer", async () => {
+    mockGetDoc.mockResolvedValueOnce(
+      feedTimerDoc({
+        active: true,
+        paused: false,
+        feedStartTime: Date.now() / 1000 - 120,
+        timerStartTime: Date.now() / 1000 - 60,
+        leftDuration: 60,
+        rightDuration: 20,
+        activeSide: "left",
+        uuid: "sess",
+      }),
+    );
+    const saved = await completeNursing(client, "cid");
+
+    expect(saved).not.toBeNull();
+    // Total was trimmed to the corrected span (upstream semantics): 60+20+~60
+    // accumulated > 120s span → left side trimmed to fit.
+    expect(saved?.total).toBeLessThanOrEqual(125);
+    expect(saved?.total).toBeGreaterThanOrEqual(115);
+    expect(saved?.right).toBe(20);
+
+    const [ref, interval] = mockSetDoc.mock.calls[0] as [{ path: string }, Record<string, unknown>];
+    const id = ref.path.split("/").at(-1) ?? "";
+    expect(ref.path).toBe(`feed/cid/intervals/${id}`);
+    expect(interval).toMatchObject({
+      mode: "breast",
+      lastSide: "left",
+      offset: OFFSET,
+      end_offset: OFFSET,
+    });
+    expect(id.length).toBeGreaterThan(20); // "{ms}-{20hex}" shape
+
+    const { patch } = lastUpdateCall();
+    expect(patch["timer.active"]).toBe(false);
+    expect(patch["prefs.lastFeed"]).toMatchObject({ mode: "breast", duration: saved?.total });
+    expect(patch["prefs.lastSide"]).toMatchObject({ lastSide: "left" });
+    expect(patch["timer.leftDuration"]).toEqual({ __sentinel: "DELETE_FIELD" });
+  });
+
+  it("is a no-op when the timer is inactive", async () => {
+    mockGetDoc.mockResolvedValueOnce(feedTimerDoc({ active: false }));
+    const saved = await completeNursing(client, "cid");
+    expect(saved).toBeNull();
+    expect(mockSetDoc).not.toHaveBeenCalled();
+  });
+
+  it("throws when end precedes the running segment start", async () => {
+    mockGetDoc.mockResolvedValueOnce(
+      feedTimerDoc({
+        active: true,
+        paused: false,
+        timerStartTime: Date.now() / 1000,
+        leftDuration: 0,
+        rightDuration: 0,
+        activeSide: "left",
+        feedStartTime: Date.now() / 1000,
+      }),
+    );
+    await expect(
+      completeNursing(client, "cid", { end: new Date(Date.now() - 10_000) }),
+    ).rejects.toThrow("end must not precede");
   });
 });
