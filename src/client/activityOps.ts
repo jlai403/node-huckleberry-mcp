@@ -12,9 +12,7 @@ import {
   query,
   where,
   orderBy,
-  startAfter,
 } from "firebase/firestore";
-import { Timestamp as FirestoreTimestamp } from "firebase/firestore";
 import type { HuckleberryClient } from "./HuckleberryClient.js";
 import {
   ActivityDocument,
@@ -237,7 +235,10 @@ export async function completeActivity(
   if (options.end !== undefined && options.duration !== undefined) {
     throw new Error("Provide either end or duration, not both");
   }
-  if (options.duration !== undefined && (!Number.isFinite(options.duration) || options.duration < 0)) {
+  if (
+    options.duration !== undefined &&
+    (!Number.isFinite(options.duration) || options.duration < 0)
+  ) {
     throw new Error("duration must be a non-negative finite number");
   }
 
@@ -324,10 +325,9 @@ export async function switchActivity(
 
   const nowMs = Date.now();
   const now = nowMs / 1000;
-  const duration =
-    source.paused
-      ? (source.duration ?? 0)
-      : roundedDuration(source.startTime, nowMs);
+  const duration = source.paused
+    ? (source.duration ?? 0)
+    : roundedDuration(source.startTime, nowMs);
   const target: Record<string, unknown> = {
     active: true,
     paused: source.paused,
@@ -424,7 +424,10 @@ export async function logActivity(
   options: LogActivityOptions,
 ): Promise<string> {
   const mode = ActivityModeSchema.parse(options.mode);
-  if (options.duration !== undefined && (!Number.isFinite(options.duration) || options.duration < 0)) {
+  if (
+    options.duration !== undefined &&
+    (!Number.isFinite(options.duration) || options.duration < 0)
+  ) {
     throw new Error("duration must be a non-negative finite number");
   }
 
@@ -522,7 +525,5 @@ export async function listActivityIntervals(
   }
 
   // Multi-doc entries (interval groups) are skipped, matching upstream.
-  void startAfter;
-  void FirestoreTimestamp;
   return events;
 }

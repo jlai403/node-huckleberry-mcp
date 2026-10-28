@@ -106,7 +106,9 @@ registerTool(
     const client = await getClient();
     await resumeActivity(client, input.child_uid, input.mode as Mode);
     return {
-      content: [{ type: "text", text: JSON.stringify({ status: "resumed", mode: input.mode }, null, 2) }],
+      content: [
+        { type: "text", text: JSON.stringify({ status: "resumed", mode: input.mode }, null, 2) },
+      ],
     };
   },
 );
@@ -151,7 +153,9 @@ registerTool(
     const client = await getClient();
     await cancelActivity(client, input.child_uid, input.mode as Mode);
     return {
-      content: [{ type: "text", text: JSON.stringify({ status: "cancelled", mode: input.mode }, null, 2) }],
+      content: [
+        { type: "text", text: JSON.stringify({ status: "cancelled", mode: input.mode }, null, 2) },
+      ],
     };
   },
 );

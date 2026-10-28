@@ -54,10 +54,7 @@ export const ActivityTimerEntry = z
     duration: z.number().optional(),
     notes: z.string().optional(),
     uuid: z.string().optional(),
-    timestamp: z
-      .object({ seconds: z.number() })
-      .passthrough()
-      .optional(),
+    timestamp: z.object({ seconds: z.number() }).passthrough().optional(),
     local_timestamp: z.number().optional(),
   })
   .passthrough();
