@@ -1,9 +1,12 @@
 import {
   collection,
   doc,
+  setDoc,
   updateDoc,
   deleteDoc,
+  getDoc,
   getDocs,
+  deleteField,
   query,
   orderBy,
   limit,
@@ -11,7 +14,9 @@ import {
 import type { HuckleberryClient } from "./HuckleberryClient.js";
 import {
   FeedingInterval,
+  FeedDocument,
   type FeedingIntervalParsed,
+  type FeedTimerParsed,
   PumpInterval,
   type PumpIntervalParsed,
 } from "../models/index.js";
@@ -64,6 +69,350 @@ export async function logNursing(
       }),
     },
   });
+}
+
+// ── Live nursing timer ────────────────────────────────────────────────────────
+// Port of py-huckleberry-api's nursing path. Unlike sleep (ms), the feed timer
+// counts in SECONDS; side durations accumulate on the timer; the saved interval
+// id matches the app's `{ms}-{20hex}` format.
+
+export async function getFeedDoc(
+  client: HuckleberryClient,
+  childUid: string,
+): Promise<{ timer: FeedTimerParsed | null }> {
+  await client.connect();
+  const db = client.getFirestore();
+  const snap = await getDoc(doc(db, "feed", childUid));
+  if (!snap.exists()) return { timer: null };
+  const parsed = FeedDocument.parse(snap.data());
+  return { timer: parsed.timer ?? null };
+}
+
+function newSessionUuid(len = 16): string {
+  const hex = "0123456789abcdef";
+  let out = "";
+  for (let i = 0; i < len; i++) out += hex[Math.floor(Math.random() * 16)];
+  return out;
+}
+
+interface NowResult {
+  sec: number;
+  ms: number;
+  ts: { seconds: number };
+}
+
+function nowParts(): NowResult {
+  const ms = Date.now();
+  const sec = ms / 1000;
+  return { sec, ms, ts: { seconds: sec } };
+}
+
+/** Resolves the currently-tracked side, mirroring the port's fallback order. */
+function currentSide(timer: FeedTimerParsed): "left" | "right" {
+  const side = timer.activeSide ?? timer.lastSide ?? "left";
+  return side === "right" ? "right" : "left";
+}
+
+function sideDurations(timer: FeedTimerParsed): { left: number; right: number } {
+  return { left: timer.leftDuration ?? 0, right: timer.rightDuration ?? 0 };
+}
+
+/** Elapsed bounded to >= 0. */
+function elapsedSince(timer: FeedTimerParsed, untilSec?: number): number {
+  const start = timer.timerStartTime ?? nowParts().sec;
+  const elapsed = (untilSec ?? nowParts().sec) - start;
+  return Math.max(0, elapsed);
+}
+
+export interface StartNursingOptions {
+  side?: "left" | "right";
+  time?: Date;
+}
+
+/** Starts the nursing timer; on an active timer with explicit `time`, shifts its start. */
+export async function startNursing(
+  client: HuckleberryClient,
+  childUid: string,
+  options: StartNursingOptions = {},
+): Promise<{ moved: boolean }> {
+  await client.connect();
+  const db = client.getFirestore();
+  const feedRef = doc(db, "feed", childUid);
+  const side = options.side ?? "left";
+  const { ts, sec } = nowParts();
+  const sessionStart = options.time ? options.time.getTime() / 1000 : sec;
+
+  const { timer } = await getFeedDoc(client, childUid);
+  if (timer?.active) {
+    if (!options.time) return { moved: false };
+    const previousStart = timer.feedStartTime ?? timer.timerStartTime ?? sessionStart;
+    const shift = sessionStart - previousStart;
+    let segmentStart = (timer.timerStartTime ?? previousStart) + shift;
+    if (!timer.paused && segmentStart > sec) {
+      // Moving the session start later must not push the running segment
+      // into the future — keep the segment start instead (upstream parity).
+      segmentStart = timer.timerStartTime ?? previousStart;
+    }
+    await updateDoc(feedRef, {
+      "timer.feedStartTime": sessionStart,
+      "timer.timerStartTime": segmentStart,
+      "timer.timestamp": ts,
+      "timer.local_timestamp": sec,
+    });
+    return { moved: true };
+  }
+
+  const timerPatch = {
+    active: true,
+    paused: false,
+    timestamp: ts,
+    local_timestamp: sec,
+    feedStartTime: sessionStart,
+    timerStartTime: sessionStart,
+    uuid: timer?.uuid ?? newSessionUuid(),
+    leftDuration: 0,
+    rightDuration: 0,
+    lastSide: "left",
+    activeSide: side,
+  };
+  await setDoc(feedRef, { timer: timerPatch }, { merge: true });
+  return { moved: false };
+}
+
+/** Pause: bank elapsed time into the active side, memoize side, clear activeSide. */
+export async function pauseNursing(client: HuckleberryClient, childUid: string): Promise<void> {
+  await client.connect();
+  const db = client.getFirestore();
+  const feedRef = doc(db, "feed", childUid);
+  const { timer } = await getFeedDoc(client, childUid);
+  if (!timer?.active || timer.paused) return;
+
+  const { ts, sec } = nowParts();
+  const { left, right } = sideDurations(timer);
+  const side0 = currentSide(timer);
+  const elapsed = elapsedSince(timer, sec);
+  const leftDuration = side0 === "left" ? left + elapsed : left;
+  const rightDuration = side0 === "right" ? right + elapsed : right;
+
+  await updateDoc(feedRef, {
+    "timer.paused": true,
+    "timer.active": true,
+    "timer.timestamp": ts,
+    "timer.local_timestamp": sec,
+    "timer.leftDuration": leftDuration,
+    "timer.rightDuration": rightDuration,
+    "timer.lastSide": side0,
+    "timer.activeSide": deleteField(),
+  });
+}
+
+export interface ResumeNursingOptions {
+  side?: "left" | "right";
+}
+
+export async function resumeNursing(
+  client: HuckleberryClient,
+  childUid: string,
+  options: ResumeNursingOptions = {},
+): Promise<void> {
+  await client.connect();
+  const db = client.getFirestore();
+  const feedRef = doc(db, "feed", childUid);
+  const { timer } = await getFeedDoc(client, childUid);
+  if (!timer?.active || !timer.paused) return;
+
+  const side =
+    options.side ??
+    (timer.lastSide !== undefined && timer.lastSide !== "none"
+      ? timer.lastSide === "right"
+        ? "right"
+        : "left"
+      : "left");
+  const { ts, sec } = nowParts();
+  await updateDoc(feedRef, {
+    "timer.paused": false,
+    "timer.active": true,
+    "timer.timestamp": ts,
+    "timer.local_timestamp": sec,
+    "timer.timerStartTime": sec,
+    "timer.activeSide": side,
+    "timer.lastSide": "none",
+  });
+}
+
+export interface SwitchNursingSideOptions {
+  side?: "left" | "right";
+}
+
+/** Switches L↔R (or to an explicit side); banking elapsed time when running. */
+export async function switchNursingSide(
+  client: HuckleberryClient,
+  childUid: string,
+  options: SwitchNursingSideOptions = {},
+): Promise<void> {
+  await client.connect();
+  const db = client.getFirestore();
+  const feedRef = doc(db, "feed", childUid);
+  const { timer } = await getFeedDoc(client, childUid);
+  if (!timer?.active) return;
+
+  const side0 = currentSide(timer);
+  const newSide = options.side ? options.side : side0 === "left" ? "right" : "left";
+  const { ts, sec } = nowParts();
+  let { left, right } = sideDurations(timer);
+
+  // Only accumulate if actively running (switching always un-pauses).
+  if (!timer.paused) {
+    const elapsed = elapsedSince(timer, sec);
+    if (side0 === "left") left += elapsed;
+    else right += elapsed;
+  }
+
+  await updateDoc(feedRef, {
+    "timer.paused": false,
+    "timer.lastSide": "none",
+    "timer.timestamp": ts,
+    "timer.local_timestamp": sec,
+    "timer.timerStartTime": sec,
+    "timer.activeSide": newSide,
+    "timer.leftDuration": left,
+    "timer.rightDuration": right,
+  });
+}
+
+export async function cancelNursing(client: HuckleberryClient, childUid: string): Promise<void> {
+  await client.connect();
+  const db = client.getFirestore();
+  const feedRef = doc(db, "feed", childUid);
+  const { timer } = await getFeedDoc(client, childUid);
+  const { ts, sec } = nowParts();
+
+  await updateDoc(feedRef, {
+    timer: {
+      active: false,
+      paused: false,
+      timestamp: ts,
+      timerStartTime: null,
+      uuid: timer?.uuid ?? newSessionUuid(),
+      local_timestamp: sec,
+      leftDuration: 0,
+      rightDuration: 0,
+      lastSide: "left",
+    },
+  });
+}
+
+export interface CompleteNursingOptions {
+  /** Replaces the session start (epoch seconds) of the saved interval. */
+  start?: number;
+  /** End of the running segment; defaults to now. */
+  end?: Date;
+}
+
+/**
+ * Completes the active nursing timer: banks the current segment, trims
+ * over-accumulated durations to fit the corrected session span, writes an
+ * app-shaped interval (`{ms}-{20hex}` id), updates prefs summaries, resets
+ * the timer. Inactive timer → no-op.
+ */
+export async function completeNursing(
+  client: HuckleberryClient,
+  childUid: string,
+  options: CompleteNursingOptions = {},
+): Promise<{ startSec: number; left: number; right: number; total: number } | null> {
+  await client.connect();
+  const db = client.getFirestore();
+  const feedRef = doc(db, "feed", childUid);
+  const { timer } = await getFeedDoc(client, childUid);
+  if (!timer?.active) return null;
+
+  if (!timer.timerStartTime) {
+    throw new Error("Missing timerStartTime on active nursing timer");
+  }
+
+  const { ts, sec, ms } = nowParts();
+  const endTimestamp = options.end ? options.end.getTime() / 1000 : sec;
+
+  let { left, right } = sideDurations(timer);
+  const side0 = currentSide(timer);
+  if (!timer.paused) {
+    const elapsed = endTimestamp - timer.timerStartTime;
+    if (elapsed < 0) throw new Error("end must not precede the current nursing segment start");
+    if (side0 === "left") left += elapsed;
+    else right += elapsed;
+  }
+
+  const feedStartSec = options.start ?? timer.feedStartTime ?? timer.timerStartTime;
+  if (feedStartSec > endTimestamp) {
+    throw new Error("start must not be after end");
+  }
+
+  // A corrected start can make the accumulated side durations exceed the
+  // corrected span — trim the active side first, then the other (upstream).
+  const maxDuration = Math.max(0, endTimestamp - feedStartSec);
+  let total = left + right;
+  if (total > maxDuration) {
+    let excess = total - maxDuration;
+    const trimPrimary = Math.min(excess, side0 === "left" ? left : right);
+    if (side0 === "left") {
+      left -= trimPrimary;
+    } else {
+      right -= trimPrimary;
+    }
+    excess -= trimPrimary;
+    if (excess > 0) {
+      if (side0 === "left") right = Math.max(0, right - excess);
+      else left = Math.max(0, left - excess);
+    }
+    total = left + right;
+  }
+
+  // Last side for history: resolve "none" by majority of durations (upstream).
+  let lastSide: "left" | "right" = side0;
+  if (timer.lastSide === "none" || timer.activeSide === undefined) {
+    lastSide = right >= left ? "right" : "left";
+  }
+
+  const offset = client.getOffsetMinutes(new Date());
+  const intervalId = `${Math.floor(ms)}-${newSessionUuid(20)}`;
+  const interval = {
+    mode: "breast",
+    start: feedStartSec,
+    lastSide,
+    leftDuration: left,
+    rightDuration: right,
+    offset,
+    end_offset: offset,
+    lastUpdated: sec,
+  };
+
+  await setDoc(doc(db, "feed", childUid, "intervals", intervalId), interval);
+
+  // prefs summaries (matches the repo's logNursing convention) + timer reset.
+  await updateDoc(feedRef, {
+    "timer.active": false,
+    "timer.paused": true,
+    "timer.timestamp": ts,
+    "timer.local_timestamp": sec,
+    "timer.lastSide": lastSide,
+    "timer.leftDuration": deleteField(),
+    "timer.rightDuration": deleteField(),
+    "timer.activeSide": deleteField(),
+    "prefs.lastFeed": {
+      mode: "breast",
+      start: feedStartSec,
+      offset,
+      duration: total,
+      leftDuration: left,
+      rightDuration: right,
+    },
+    "prefs.lastSide": { lastSide, start: feedStartSec },
+    "prefs.timestamp": { seconds: sec },
+    "prefs.local_timestamp": sec,
+  });
+
+  void intervalId;
+  return { startSec: feedStartSec, left, right, total };
 }
 
 // ── Bottle ─────────────────────────────────────────────────────────────────

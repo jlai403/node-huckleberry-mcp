@@ -10,12 +10,21 @@ export type { ChildDocumentParsed } from "./child.js";
 export { SleepInterval, SleepTimer, SleepDocument } from "./sleep.js";
 export type { SleepIntervalParsed, SleepTimerParsed, SleepDocumentParsed } from "./sleep.js";
 
-export { NursingInterval, BottleInterval, SolidsInterval, FeedingInterval } from "./feed.js";
+export {
+  NursingInterval,
+  BottleInterval,
+  SolidsInterval,
+  FeedingInterval,
+  FeedTimer,
+  FeedDocument,
+} from "./feed.js";
 export type {
   NursingIntervalParsed,
   BottleIntervalParsed,
   SolidsIntervalParsed,
   FeedingIntervalParsed,
+  FeedTimerParsed,
+  FeedDocumentParsed,
 } from "./feed.js";
 
 export { PumpInterval } from "./pump.js";
