@@ -17,6 +17,8 @@ import {
   FeedDocument,
   type FeedingIntervalParsed,
   type FeedTimerParsed,
+  PumpDocument,
+  type PumpTimerParsed,
   PumpInterval,
   type PumpIntervalParsed,
 } from "../models/index.js";
@@ -729,4 +731,220 @@ export async function deletePump(
   await client.connect();
   const db = client.getFirestore();
   await deleteDoc(doc(db, "pump", childUid, "intervals", intervalId));
+}
+
+// ── Live pump timer ──────────────────────────────────────────────────────────
+// Port of py-huckleberry-api's pump path (ms timestamps like sleep). Completion
+// validates amounts, reuses the logPump interval shape, and resets the timer to
+// the app's minimal inactive shape.
+
+export async function getPumpDoc(
+  client: HuckleberryClient,
+  childUid: string,
+): Promise<{ timer: PumpTimerParsed | null }> {
+  await client.connect();
+  const db = client.getFirestore();
+  const snap = await getDoc(doc(db, "pump", childUid));
+  if (!snap.exists()) return { timer: null };
+  const parsed = PumpDocument.parse(snap.data());
+  return { timer: parsed.timer ?? null };
+}
+
+// Session uuid helper is shared with the nursing ops (newSessionUuid above).
+
+export interface StartPumpOptions {
+  time?: Date;
+}
+
+export async function startPump(
+  client: HuckleberryClient,
+  childUid: string,
+  options: StartPumpOptions = {},
+): Promise<{ moved: boolean }> {
+  await client.connect();
+  const db = client.getFirestore();
+  const pumpRef = doc(db, "pump", childUid);
+  const { timer } = await getPumpDoc(client, childUid);
+  const nowMs = Date.now();
+  const requested = options.time ? options.time.getTime() : nowMs;
+
+  if (timer?.active) {
+    if (!options.time) return { moved: false };
+    if (timer.paused && timer.endTime !== undefined && requested > timer.endTime) {
+      throw new Error("start must not be after the paused pump end time");
+    }
+    await updateDoc(pumpRef, {
+      "timer.startTime": requested,
+      "timer.timestamp": { seconds: nowMs / 1000 },
+      "timer.local_timestamp": nowMs / 1000,
+    });
+    return { moved: true };
+  }
+
+  await updateDoc(pumpRef, {
+    timer: {
+      active: true,
+      paused: false,
+      timestamp: { seconds: nowMs / 1000 },
+      local_timestamp: nowMs / 1000,
+      startTime: requested,
+      uuid: timer?.uuid ?? newSessionUuid(),
+    },
+  });
+  return { moved: false };
+}
+
+export async function pausePump(client: HuckleberryClient, childUid: string): Promise<void> {
+  await client.connect();
+  const db = client.getFirestore();
+  const pumpRef = doc(db, "pump", childUid);
+  const { timer } = await getPumpDoc(client, childUid);
+  if (!timer?.active || timer.paused) return;
+
+  const nowMs = Date.now();
+  await updateDoc(pumpRef, {
+    "timer.active": true,
+    "timer.paused": true,
+    "timer.endTime": nowMs,
+    "timer.timestamp": { seconds: nowMs / 1000 },
+    "timer.local_timestamp": nowMs / 1000,
+  });
+}
+
+export async function resumePump(client: HuckleberryClient, childUid: string): Promise<void> {
+  await client.connect();
+  const db = client.getFirestore();
+  const pumpRef = doc(db, "pump", childUid);
+  const { timer } = await getPumpDoc(client, childUid);
+  if (!timer?.active || !timer.paused) return;
+
+  const nowMs = Date.now();
+  await updateDoc(pumpRef, {
+    "timer.active": true,
+    "timer.paused": false,
+    "timer.endTime": deleteField(),
+    "timer.timestamp": { seconds: nowMs / 1000 },
+    "timer.local_timestamp": nowMs / 1000,
+  });
+}
+
+export async function cancelPump(client: HuckleberryClient, childUid: string): Promise<void> {
+  await client.connect();
+  const db = client.getFirestore();
+  const pumpRef = doc(db, "pump", childUid);
+  const { timer } = await getPumpDoc(client, childUid);
+  if (!timer?.active) return;
+
+  const nowMs = Date.now();
+  await updateDoc(pumpRef, {
+    timer: {
+      active: false,
+      paused: false,
+      timestamp: { seconds: nowMs / 1000 },
+      local_timestamp: nowMs / 1000,
+      startTime: nowMs,
+      uuid: timer.uuid ?? newSessionUuid(),
+    },
+  });
+}
+
+export interface CompletePumpOptions {
+  /** Corrects the saved interval start (overrides timer startTime). */
+  start?: Date;
+  /** Corrects the end; defaults to paused endTime, else now. */
+  end?: Date;
+  /** Left amount (requires rightAmount) for letright entries. */
+  leftAmount?: number;
+  /** Right amount (requires leftAmount) for letright entries. */
+  rightAmount?: number;
+  /** Total for total entries (split evenly; mutually exclusive with left/right). */
+  totalAmount?: number;
+  units: "ml" | "oz";
+  notes?: string;
+}
+
+/**
+ * Completes the active pump timer: validates the amounts, saves an interval
+ * via the logPump shape, and resets the timer to the minimal inactive shape.
+ * Inactive → no-op.
+ */
+export async function completePump(
+  client: HuckleberryClient,
+  childUid: string,
+  options: CompletePumpOptions,
+): Promise<{ startSec: number; durationSec: number; entryMode: "total" | "leftright" } | null> {
+  // Amount validation mirrors py's _resolve_pump_amounts.
+  if (options.totalAmount !== undefined) {
+    if (options.leftAmount !== undefined || options.rightAmount !== undefined) {
+      throw new Error("Provide either totalAmount or left/right amounts, not both");
+    }
+    if (!Number.isFinite(options.totalAmount) || options.totalAmount < 0) {
+      throw new Error("totalAmount must be a non-negative finite number");
+    }
+  } else if (options.leftAmount === undefined || options.rightAmount === undefined) {
+    throw new Error("leftright pump entries require both leftAmount and rightAmount");
+  } else if (!Number.isFinite(options.leftAmount) || options.leftAmount < 0) {
+    throw new Error("leftAmount must be a non-negative finite number");
+  } else if (!Number.isFinite(options.rightAmount) || options.rightAmount < 0) {
+    throw new Error("rightAmount must be a non-negative finite number");
+  }
+
+  await client.connect();
+  const db = client.getFirestore();
+  const pumpRef = doc(db, "pump", childUid);
+  const { timer } = await getPumpDoc(client, childUid);
+  if (!timer?.active) return null;
+
+  const startMs = options.start
+    ? options.start.getTime()
+    : timer.startTime !== undefined
+      ? timer.startTime
+      : undefined;
+  if (startMs === undefined) {
+    throw new Error("Active pump timer is missing startTime");
+  }
+
+  const endMs = options.end
+    ? options.end.getTime()
+    : timer.paused && timer.endTime !== undefined
+      ? timer.endTime
+      : Date.now();
+  const durationSec = (endMs - startMs) / 1000;
+  if (durationSec < 0) {
+    throw new Error("end must not precede start");
+  }
+
+  const units = options.units ?? (timer.units as "ml" | "oz" | undefined) ?? "ml";
+  const { totalAmount, leftAmount, rightAmount, notes } = options;
+
+  // Write the interval via logPump's shape. Documented deviation from upstream:
+  // py's complete path skips prefs.lastPump; we keep it (matches logPump) until
+  // live verification says otherwise (flagged in PR).
+  await logPump(client, childUid, {
+    start: startMs / 1000,
+    leftAmount: leftAmount ?? 0,
+    rightAmount: rightAmount ?? 0,
+    units,
+    duration: durationSec,
+    totalAmount,
+    notes,
+  });
+
+  const nowMs = Date.now();
+  await updateDoc(pumpRef, {
+    timer: {
+      active: false,
+      paused: false,
+      timestamp: { seconds: nowMs / 1000 },
+      local_timestamp: nowMs / 1000,
+      startTime: nowMs,
+      uuid: timer.uuid ?? newSessionUuid(),
+    },
+  });
+
+  return {
+    startSec: startMs / 1000,
+    durationSec,
+    entryMode: totalAmount !== undefined ? "total" : "leftright",
+  };
 }

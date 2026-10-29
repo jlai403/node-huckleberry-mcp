@@ -27,8 +27,23 @@ export type {
   FeedDocumentParsed,
 } from "./feed.js";
 
-export { PumpInterval } from "./pump.js";
-export type { PumpIntervalParsed } from "./pump.js";
+export { PumpInterval, PumpTimer, PumpDocument } from "./pump.js";
+export type { PumpIntervalParsed, PumpTimerParsed, PumpDocumentParsed } from "./pump.js";
+
+export {
+  ACTIVITY_MODES,
+  ACTIVITY_LAST_FIELD_BY_MODE,
+  ActivityModeSchema,
+  ActivityInterval,
+  ActivityTimerEntry,
+  ActivityDocument,
+} from "./activity.js";
+export type {
+  ActivityMode,
+  ActivityIntervalParsed,
+  ActivityTimerEntryParsed,
+  ActivityDocumentParsed,
+} from "./activity.js";
 
 export { DiaperInterval } from "./diaper.js";
 export type { DiaperIntervalParsed } from "./diaper.js";

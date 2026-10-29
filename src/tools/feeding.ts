@@ -19,6 +19,12 @@ import {
   switchNursingSide,
   cancelNursing,
   completeNursing,
+  getPumpDoc,
+  startPump,
+  pausePump,
+  resumePump,
+  cancelPump,
+  completePump,
 } from "../client/index.js";
 
 const sideSchema = z.enum(["left", "right"]);
@@ -333,6 +339,167 @@ registerTool(
         {
           type: "text",
           text: JSON.stringify({ feed_id: id }, null, 2),
+        },
+      ],
+    };
+  },
+);
+
+// get_pump — read the live pump timer state
+registerTool(
+  "get_pump",
+  "Get the child's pump document and current timer state (active/paused/start time)",
+  z.object({
+    child_uid: z.string().min(1, "child_uid is required"),
+  }),
+  async (input) => {
+    const client = await getClient();
+    const { timer } = await getPumpDoc(client, input.child_uid);
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify(
+            {
+              timer: timer
+                ? {
+                    active: timer.active,
+                    paused: timer.paused,
+                    start_epoch_ms: timer.startTime ?? null,
+                    paused_end_epoch_ms: timer.endTime ?? null,
+                    units: timer.units ?? null,
+                    session_uuid: timer.uuid ?? null,
+                  }
+                : null,
+            },
+            null,
+            2,
+          ),
+        },
+      ],
+    };
+  },
+);
+
+// start_pump — start the pump timer
+registerTool(
+  "start_pump",
+  "Start the pumping timer. Pass `start` (epoch seconds) to set the session start; on an already-running timer this moves its start instead.",
+  z.object({
+    child_uid: z.string().min(1, "child_uid is required"),
+    start: z.number().min(0).optional(),
+  }),
+  async (input) => {
+    const client = await getClient();
+    const result = await startPump(client, input.child_uid, {
+      time: input.start !== undefined ? new Date(input.start * 1000) : undefined,
+    });
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify(
+            result.moved
+              ? { status: "moved", message: "Pump timer already active — start time moved" }
+              : { status: "started" },
+            null,
+            2,
+          ),
+        },
+      ],
+    };
+  },
+);
+
+// pause_pump
+registerTool(
+  "pause_pump",
+  "Pause the running pumping timer",
+  z.object({ child_uid: z.string().min(1, "child_uid is required") }),
+  async (input) => {
+    const client = await getClient();
+    await pausePump(client, input.child_uid);
+    return { content: [{ type: "text", text: JSON.stringify({ status: "paused" }, null, 2) }] };
+  },
+);
+
+// resume_pump
+registerTool(
+  "resume_pump",
+  "Resume a paused pumping timer",
+  z.object({ child_uid: z.string().min(1, "child_uid is required") }),
+  async (input) => {
+    const client = await getClient();
+    await resumePump(client, input.child_uid);
+    return { content: [{ type: "text", text: JSON.stringify({ status: "resumed" }, null, 2) }] };
+  },
+);
+
+// cancel_pump — discard without saving
+registerTool(
+  "cancel_pump",
+  "Cancel the running/paused pumping timer WITHOUT saving an entry",
+  z.object({ child_uid: z.string().min(1, "child_uid is required") }),
+  async (input) => {
+    const client = await getClient();
+    await cancelPump(client, input.child_uid);
+    return { content: [{ type: "text", text: JSON.stringify({ status: "cancelled" }, null, 2) }] };
+  },
+);
+
+// complete_pump — save amounts and reset
+registerTool(
+  "complete_pump",
+  "Complete the pumping timer and save the session. Amounts: either `total_amount` (split evenly left/right) or both `left_amount` + `right_amount`. `start`/`end` (epoch seconds) optionally correct the interval.",
+  z.object({
+    child_uid: z.string().min(1, "child_uid is required"),
+    total_amount: z.number().min(0).optional(),
+    left_amount: z.number().min(0).optional(),
+    right_amount: z.number().min(0).optional(),
+    units: z.enum(["ml", "oz"]).default("ml"),
+    notes: z.string().optional(),
+    start: z.number().min(0).optional(),
+    end: z.number().min(0).optional(),
+  }),
+  async (input) => {
+    const client = await getClient();
+    const saved = await completePump(client, input.child_uid, {
+      start: input.start !== undefined ? new Date(input.start * 1000) : undefined,
+      end: input.end !== undefined ? new Date(input.end * 1000) : undefined,
+      leftAmount: input.left_amount,
+      rightAmount: input.right_amount,
+      totalAmount: input.total_amount,
+      units: input.units as "ml" | "oz",
+      notes: input.notes,
+    });
+    if (!saved) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              { status: "noop", message: "No active pump timer to complete" },
+              null,
+              2,
+            ),
+          },
+        ],
+      };
+    }
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify(
+            {
+              status: "completed",
+              start: saved.startSec,
+              duration: saved.durationSec,
+              entry_mode: saved.entryMode,
+            },
+            null,
+            2,
+          ),
         },
       ],
     };
