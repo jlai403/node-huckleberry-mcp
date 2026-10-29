@@ -501,11 +501,13 @@ export async function logSolids(
       lastUpdated,
     },
     prefs: {
-      lastFeed: {
+      // Ground-truth: the feed prefs key for solids is lastSolid (observed key
+      // in the schema dump; shape inferred analogous to lastNursing — revisit
+      // if a phone-created solids entry shows different fields).
+      lastSolid: {
         mode: "solids",
         start: options.start,
         offset,
-        duration: 0,
       },
     },
   });
@@ -584,7 +586,7 @@ export async function editFeed(
 /**
  * Permanently deletes a feed interval (`feed/{cid}/intervals/{id}`) — nursing,
  * bottle, or solids. The id comes from `getFeedHistory`. Does **not** recompute
- * the parent `prefs.lastFeed` summary.
+ * the parent `prefs.lastSolid` summary.
  */
 export async function deleteFeed(
   client: HuckleberryClient,
