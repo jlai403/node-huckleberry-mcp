@@ -60,11 +60,13 @@ export async function logNursing(
       lastUpdated,
     },
     prefs: {
-      lastFeed: {
-        mode: "breast",
+      lastNursing: {
         start: options.start,
         offset,
+        mode: "breast",
         duration: (options.leftDuration ?? 0) + (options.rightDuration ?? 0),
+        ...(options.leftDuration !== undefined && { leftDuration: options.leftDuration }),
+        ...(options.rightDuration !== undefined && { rightDuration: options.rightDuration }),
       },
       ...(options.lastSide !== undefined && {
         lastSide: { lastSide: options.lastSide, start: options.start },
@@ -400,7 +402,7 @@ export async function completeNursing(
     "timer.leftDuration": deleteField(),
     "timer.rightDuration": deleteField(),
     "timer.activeSide": deleteField(),
-    "prefs.lastFeed": {
+    "prefs.lastNursing": {
       mode: "breast",
       start: feedStartSec,
       offset,
@@ -453,15 +455,18 @@ export async function logBottle(
       lastUpdated,
     },
     prefs: {
-      lastFeed: {
+      lastBottle: {
         mode: "bottle",
         start: options.start,
         offset,
-        duration: 0,
+        bottleType: options.bottleType,
+        bottleAmount: options.amount,
+        bottleUnits: options.units,
       },
       bottleAmount: options.amount,
       bottleUnits: options.units,
       bottleType: options.bottleType,
+      lastBottleUuid: newSessionUuid(),
     },
   });
 }
@@ -843,6 +848,7 @@ export async function cancelPump(client: HuckleberryClient, childUid: string): P
       timestamp: { seconds: nowMs / 1000 },
       local_timestamp: nowMs / 1000,
       startTime: nowMs,
+      entryMode: timer.entryMode ?? "total",
       uuid: timer.uuid ?? newSessionUuid(),
     },
   });
@@ -938,6 +944,7 @@ export async function completePump(
       timestamp: { seconds: nowMs / 1000 },
       local_timestamp: nowMs / 1000,
       startTime: nowMs,
+      entryMode: totalAmount !== undefined ? "total" : "leftright",
       uuid: timer.uuid ?? newSessionUuid(),
     },
   });

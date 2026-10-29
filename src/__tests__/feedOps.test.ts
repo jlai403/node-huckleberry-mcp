@@ -105,9 +105,9 @@ describe("feedOps writes", () => {
       rightDuration: 600,
       lastSide: "left",
     });
-    const prefs = lastPrefs() as { lastFeed: { duration: number }; lastSide: unknown };
+    const prefs = lastPrefs() as { lastNursing: { duration: number }; lastSide: unknown };
     // Regression: durations are seconds already → 600+600 = 1200, not 1.2.
-    expect(prefs.lastFeed.duration).toBe(1200);
+    expect(prefs.lastNursing.duration).toBe(1200);
     expect(prefs.lastSide).toEqual({ lastSide: "left", start: 1000 });
   });
 
@@ -474,7 +474,7 @@ describe("cancelNursing / completeNursing", () => {
 
     const { patch } = lastUpdateCall();
     expect(patch["timer.active"]).toBe(false);
-    expect(patch["prefs.lastFeed"]).toMatchObject({ mode: "breast", duration: saved?.total });
+    expect(patch["prefs.lastNursing"]).toMatchObject({ mode: "breast", duration: saved?.total });
     expect(patch["prefs.lastSide"]).toMatchObject({ lastSide: "left" });
     expect(patch["timer.leftDuration"]).toEqual({ __sentinel: "DELETE_FIELD" });
   });
