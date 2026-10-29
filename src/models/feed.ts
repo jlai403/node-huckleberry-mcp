@@ -65,8 +65,8 @@ export const FeedTimer = z
   .object({
     active: z.boolean().default(false),
     paused: z.boolean().default(false),
-    feedStartTime: z.number().optional(),
-    timerStartTime: z.number().optional(),
+    feedStartTime: z.number().nullable().optional(),
+    timerStartTime: z.number().nullable().optional(),
     leftDuration: z.number().optional(),
     rightDuration: z.number().optional(),
     // "none" marks a paused/transitioning segment (app convention).

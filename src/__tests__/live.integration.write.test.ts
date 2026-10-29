@@ -5,6 +5,7 @@ import { createServer } from "../server/server.js";
 import "../tools/sleep.js";
 import { HuckleberryClient } from "../client/HuckleberryClient.js";
 import {
+  getUser,
   getDefaultChildUid,
   logSleep,
   getSleepHistory,
@@ -26,6 +27,25 @@ import {
   editGrowth,
 } from "../client/index.js";
 
+/**
+ * Resolves the child to operate on for live tests.
+ *
+ * Safety: with multiple children on one account, `getDefaultChildUid`'
+ * default (lastChild / childList[0]) could select a REAL child. When
+ * HUCKLEBERRY_TEST_CHILD_UID is set we pin all live (especially write)
+ * tests to that child explicitly.
+ */
+async function resolveLiveChildUid(client: HuckleberryClient): Promise<string> {
+  const pinned = process.env.HUCKLEBERRY_TEST_CHILD_UID?.trim();
+  if (pinned) {
+    const { childUids } = await getUser(client);
+    if (!childUids.includes(pinned)) {
+      throw new Error(`HUCKLEBERRY_TEST_CHILD_UID ${pinned} is not in this account's childList`);
+    }
+    return pinned;
+  }
+  return getDefaultChildUid(client);
+}
 /**
  * T3.2 — Live WRITE round-trip suite. For each tracker it logs a real entry
  * (with a unique `notes`), reads it back to prove the write landed in Firestore
@@ -87,7 +107,7 @@ async function roundTrip(
 ): Promise<void> {
   const client = makeClient();
   try {
-    const cid = await getDefaultChildUid(client);
+    const cid = await resolveLiveChildUid(client);
     const id = await write(client, cid);
     let cleaned = false;
     try {
@@ -155,7 +175,7 @@ describe.skipIf(!enabled)("live write round-trip (log_* + edit_* + delete)", () 
       let id: string | undefined;
       let cid: string | undefined;
       try {
-        cid = await getDefaultChildUid(client);
+        cid = await resolveLiveChildUid(client);
 
         const server = createServer();
         const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair();

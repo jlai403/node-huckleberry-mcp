@@ -770,7 +770,7 @@ export async function startPump(
 
   if (timer?.active) {
     if (!options.time) return { moved: false };
-    if (timer.paused && timer.endTime !== undefined && requested > timer.endTime) {
+    if (timer.paused && timer.endTime != null && requested > timer.endTime) {
       throw new Error("start must not be after the paused pump end time");
     }
     await updateDoc(pumpRef, {
@@ -897,18 +897,15 @@ export async function completePump(
 
   const startMs = options.start
     ? options.start.getTime()
-    : timer.startTime !== undefined
+    : timer.startTime != null
       ? timer.startTime
       : undefined;
   if (startMs === undefined) {
     throw new Error("Active pump timer is missing startTime");
   }
 
-  const endMs = options.end
-    ? options.end.getTime()
-    : timer.paused && timer.endTime !== undefined
-      ? timer.endTime
-      : Date.now();
+  const pausedEnd = timer.paused && timer.endTime != null ? timer.endTime : undefined;
+  const endMs = options.end ? options.end.getTime() : (pausedEnd ?? Date.now());
   const durationSec = (endMs - startMs) / 1000;
   if (durationSec < 0) {
     throw new Error("end must not precede start");
