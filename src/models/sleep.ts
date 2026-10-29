@@ -23,9 +23,9 @@ export const SleepTimer = z
   .object({
     active: z.boolean().default(false),
     paused: z.boolean().default(false),
-    // Epoch milliseconds (unlike feed's seconds timerStartTime).
-    timerStartTime: z.number().optional(),
-    timerEndTime: z.number().optional(),
+    // Epoch ms (unlike feed's seconds). Reset leaves null, not absent.
+    timerStartTime: z.number().nullable().optional(),
+    timerEndTime: z.number().nullable().optional(),
     uuid: z.string().optional(),
     timestamp: z.object({ seconds: z.number() }).passthrough().optional(),
     local_timestamp: z.number().optional(),

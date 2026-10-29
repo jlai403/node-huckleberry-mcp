@@ -186,7 +186,7 @@ export async function startSleep(
 
   if (timer?.active) {
     if (!options.time) return { moved: false };
-    if (timer.paused && timer.timerEndTime !== undefined && startMs > timer.timerEndTime) {
+    if (timer.paused && timer.timerEndTime != null && startMs > timer.timerEndTime) {
       throw new Error("start must not be after the paused sleep end time");
     }
     await updateDoc(sleepRef, {
@@ -312,7 +312,7 @@ export async function completeSleep(
   const { timer } = await getSleepDoc(client, childUid);
   if (!timer?.active) return null;
 
-  let startMs = timer.timerStartTime;
+  let startMs = timer.timerStartTime ?? undefined;
   if (options.start) startMs = options.start.getTime();
   if (startMs === undefined) {
     const sec = timer.timestamp?.seconds;
@@ -325,11 +325,8 @@ export async function completeSleep(
     }
   }
 
-  const endMs = options.end
-    ? options.end.getTime()
-    : timer.paused && timer.timerEndTime !== undefined
-      ? timer.timerEndTime
-      : Date.now();
+  const pausedEnd = timer.paused && timer.timerEndTime != null ? timer.timerEndTime : undefined;
+  const endMs = options.end ? options.end.getTime() : (pausedEnd ?? Date.now());
   if (endMs < startMs) {
     throw new Error("end must not precede start");
   }

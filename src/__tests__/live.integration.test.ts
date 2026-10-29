@@ -12,6 +12,25 @@ import {
 } from "../client/index.js";
 
 /**
+ * Resolves the child to operate on for live tests.
+ *
+ * Safety: with multiple children on one account, `getDefaultChildUid`'
+ * default (lastChild / childList[0]) could select a REAL child. When
+ * HUCKLEBERRY_TEST_CHILD_UID is set we pin all live (especially write)
+ * tests to that child explicitly.
+ */
+async function resolveLiveChildUid(client: HuckleberryClient): Promise<string> {
+  const pinned = process.env.HUCKLEBERRY_TEST_CHILD_UID?.trim();
+  if (pinned) {
+    const { childUids } = await getUser(client);
+    if (!childUids.includes(pinned)) {
+      throw new Error(`HUCKLEBERRY_TEST_CHILD_UID ${pinned} is not in this account's childList`);
+    }
+    return pinned;
+  }
+  return getDefaultChildUid(client);
+}
+/**
  * T3.2 — Live integration suite. Runs against a REAL Huckleberry account and is
  * skipped unless HUCKLEBERRY_EMAIL and HUCKLEBERRY_PASSWORD are set, so CI (which
  * has no credentials) skips it by default.
@@ -68,7 +87,7 @@ describe.skipIf(!hasCreds)("live schema read-back", () => {
     async () => {
       const client = new HuckleberryClient({ credentials: { email: email!, password: password! } });
       try {
-        const cid = await getDefaultChildUid(client);
+        const cid = await resolveLiveChildUid(client);
         const items = await getSleepHistory(client, cid, { limit: 5 });
         expect(Array.isArray(items)).toBe(true);
         if (items.length > 0) {
@@ -85,7 +104,7 @@ describe.skipIf(!hasCreds)("live schema read-back", () => {
   it("feed intervals parse with a mode discriminator", { timeout: 20000 }, async () => {
     const client = new HuckleberryClient({ credentials: { email: email!, password: password! } });
     try {
-      const cid = await getDefaultChildUid(client);
+      const cid = await resolveLiveChildUid(client);
       const items = await getFeedHistory(client, cid, { limit: 10 });
       expect(Array.isArray(items)).toBe(true);
       if (items.length > 0) {
@@ -100,7 +119,7 @@ describe.skipIf(!hasCreds)("live schema read-back", () => {
   it("pump intervals parse with entryMode + amounts", { timeout: 20000 }, async () => {
     const client = new HuckleberryClient({ credentials: { email: email!, password: password! } });
     try {
-      const cid = await getDefaultChildUid(client);
+      const cid = await resolveLiveChildUid(client);
       const items = await listPumpIntervals(client, cid, { limit: 5 });
       expect(Array.isArray(items)).toBe(true);
       if (items.length > 0) {
@@ -115,7 +134,7 @@ describe.skipIf(!hasCreds)("live schema read-back", () => {
   it("diaper intervals parse with mode + numeric start", { timeout: 20000 }, async () => {
     const client = new HuckleberryClient({ credentials: { email: email!, password: password! } });
     try {
-      const cid = await getDefaultChildUid(client);
+      const cid = await resolveLiveChildUid(client);
       const items = await getDiaperHistory(client, cid, { limit: 5 });
       expect(Array.isArray(items)).toBe(true);
       if (items.length > 0) {
@@ -130,7 +149,7 @@ describe.skipIf(!hasCreds)("live schema read-back", () => {
   it("growth entries parse with mode growth + numeric start", { timeout: 20000 }, async () => {
     const client = new HuckleberryClient({ credentials: { email: email!, password: password! } });
     try {
-      const cid = await getDefaultChildUid(client);
+      const cid = await resolveLiveChildUid(client);
       const items = await getGrowthHistory(client, cid, { limit: 5 });
       expect(Array.isArray(items)).toBe(true);
       if (items.length > 0) {

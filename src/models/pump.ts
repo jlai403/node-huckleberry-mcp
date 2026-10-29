@@ -25,8 +25,9 @@ export const PumpTimer = z
   .object({
     active: z.boolean().default(false),
     paused: z.boolean().default(false),
-    startTime: z.number().optional(),
-    endTime: z.number().optional(),
+    // ms; reset leaves null, not absent (dump-observed).
+    startTime: z.number().nullable().optional(),
+    endTime: z.number().nullable().optional(),
     units: z.string().optional(),
     uuid: z.string().optional(),
     timestamp: z.object({ seconds: z.number() }).passthrough().optional(),
