@@ -15,10 +15,9 @@ import {
 } from "../client/index.js";
 import {
   ageInDays,
-  bmi,
-  evaluate,
-  type GrowthResult,
-} from "who-growth-standards";
+  calculateZScore,
+  type ZScoreResult,
+} from "@pedi-growth/core";
 
 // ── helpers ────────────────────────────────────────────────────────────────
 
@@ -30,6 +29,55 @@ function normalizeSex(gender: string | undefined): Sex | null {
   if (g.startsWith("m") || g === "boy") return "male";
   if (g.startsWith("f") || g === "girl") return "female";
   return null;
+}
+
+
+// ── indicators across the 4 supported WHO views (async: pedi loads tables) ──
+
+type IndicatorsInput = {
+  weight?: number;
+  height?: number;
+  head?: number;
+};
+
+type IndicatorsResult = {
+  wfa?: ZScoreResult;
+  lhfa?: ZScoreResult;
+  hcfa?: ZScoreResult;
+  wfl?: ZScoreResult;
+};
+
+async function indicators(
+  input: IndicatorsInput,
+  sex: Sex,
+  ageDays: number,
+): Promise<IndicatorsResult> {
+  const out: IndicatorsResult = {};
+  const results = await Promise.allSettled([
+    input.weight !== undefined
+      ? calculateZScore({ indicator: "weight-for-age", sex, ageInDays: ageDays, measurement: input.weight, chartSet: "who-standard" })
+      : null,
+    input.height !== undefined
+      ? calculateZScore({ indicator: "length-height-for-age", sex, ageInDays: ageDays, measurement: input.height, chartSet: "who-standard" })
+      : null,
+    input.head !== undefined
+      ? calculateZScore({ indicator: "head-circumference-for-age", sex, ageInDays: ageDays, measurement: input.head, chartSet: "who-standard" })
+      : null,
+    input.weight !== undefined && input.height !== undefined
+      ? calculateZScore({ indicator: "weight-for-length", sex, lengthHeight: input.height, measurement: input.weight, chartSet: "who-standard" })
+      : null,
+  ]);
+  for (const r of results) {
+    if (r.status === "fulfilled" && r.value) {
+      const key =
+        r.value.indicator === "weight-for-age" ? "wfa"
+        : r.value.indicator === "length-height-for-age" ? "lhfa"
+        : r.value.indicator === "head-circumference-for-age" ? "hcfa"
+        : "wfl";
+      out[key] = r.value;
+    }
+  }
+  return out;
 }
 
 // ── get_growth_percentiles ─────────────────────────────────────────────────
@@ -66,7 +114,7 @@ registerTool(
     }
 
     const entries = await getGrowthHistory(client, input.child_uid, { limit: input.limit });
-    const results = entries.map((e) => {
+    const resultsPromise = entries.map(async (e) => {
       const at = new Date((e.start ?? 0) * 1000);
       let ageDays: number | null = null;
       try {
@@ -77,18 +125,14 @@ registerTool(
       }
       if (ageDays === null || Number.isNaN(ageDays)) return null;
       const out: Record<string, unknown> = { date: at.toISOString().slice(0, 10), age_days: ageDays };
-      try {
-        if (e.weight !== undefined) out.weight = evaluate("wfa", sex, e.weight, ageDays);
-        if (e.height !== undefined) out.height = evaluate("lhfa", sex, e.height, ageDays);
-        if (e.head !== undefined) out.head = evaluate("hcfa", sex, e.head, ageDays);
-        if (e.weight !== undefined && e.height !== undefined) {
-          out.weight_for_length = evaluate("wfl", sex, e.weight, e.height);
-        }
-      } catch (err) {
-        out.error = err instanceof Error ? err.message : String(err);
-      }
+      out.percentiles = await indicators(
+        { weight: e.weight, height: e.height, head: e.head },
+        sex,
+        ageDays as number,
+      );
       return out;
     });
+    const results = (await Promise.all(resultsPromise)).filter(Boolean);
 
     return { content: [{ type: "text", text: JSON.stringify({ child: child.childsName ?? null, entries: results }, null, 2) }] };
   },
@@ -134,13 +178,10 @@ registerTool(
         date: at.toISOString().slice(0, 10),
         age_days: ageDays,
       };
-      try {
-        if (e.weight !== undefined) row.wfa_z = evaluate("wfa", sex, e.weight, ageDays).zScore;
-        if (e.height !== undefined) row.lhfa_z = evaluate("lhfa", sex, e.height, ageDays).zScore;
-        if (e.head !== undefined) row.hcfa_z = evaluate("hcfa", sex, e.head, ageDays).zScore;
-      } catch {
-        /* measurement outside table range — skip that indicator */
-      }
+      const r = await indicators({ weight: e.weight, height: e.height, head: e.head }, sex, ageDays);
+      if (r.wfa) row.wfa_z = r.wfa.zScore;
+      if (r.lhfa) row.lhfa_z = r.lhfa.zScore;
+      if (r.hcfa) row.hcfa_z = r.hcfa.zScore;
       series.push(row);
     }
 
