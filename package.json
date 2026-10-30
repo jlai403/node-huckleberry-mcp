@@ -59,8 +59,8 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",
-    "firebase": "^10.8.0",
     "@pedi-growth/core": "^1.1.2",
+    "firebase": "^10.8.0",
     "zod": "^3.22.4"
   },
   "devDependencies": {
