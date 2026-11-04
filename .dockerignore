@@ -1,0 +1,17 @@
+# The image builds from source, so the only inputs it needs are package files,
+# tsconfig and src/. Everything else is repository furniture.
+.git
+.github
+node_modules
+dist
+docs
+skills
+scripts
+src/__tests__
+**/*.test.ts
+*.md
+.env
+.env.*
+schema-dump*.json
+Dockerfile
+.dockerignore
