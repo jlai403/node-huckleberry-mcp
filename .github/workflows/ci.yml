@@ -33,3 +33,16 @@ jobs:
 
       - name: Test
         run: npm test
+
+  # Dockerfile review on every PR, not only at tag time: the publish workflow
+  # grades the image, this grades the recipe before an image exists.
+  dockerfile:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Lint Dockerfile
+        uses: immanuwell/dockerfile-roast@1.7.0
+        with:
+          files: Dockerfile
