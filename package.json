@@ -70,6 +70,9 @@
     "typescript": "^5.3.3",
     "vitest": "^4.1.8"
   },
+  "overrides": {
+    "websocket-driver": "0.7.5"
+  },
   "engines": {
     "node": ">=24.0.0",
     "npm": ">=9.0.0"
