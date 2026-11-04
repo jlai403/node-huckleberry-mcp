@@ -1,6 +1,6 @@
 {
   "name": "node-huckleberry-mcp",
-  "version": "0.7.1",
+  "version": "0.7.2",
   "description": "Node.js MCP server for Huckleberry baby tracker. Expose sleep, feeding, growth, diapers, and solids data to Claude and other AI applications.",
   "keywords": [
     "ai",
