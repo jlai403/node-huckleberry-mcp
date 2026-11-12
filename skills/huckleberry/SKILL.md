@@ -2,7 +2,7 @@
 name: huckleberry
 description: >-
   Log and read baby-tracking data (sleep, feeds, nursing, bottle, pump, solids,
-  diapers, potty, growth) through the Huckleberry MCP server. Use whenever the
+  diapers, potty, growth, medication) through the Huckleberry MCP server. Use whenever the
   user wants to record a baby event or ask about their baby's history/patterns.
 ---
 
@@ -81,7 +81,23 @@ sleep/feed/pump/diaper, `entry_id` for growth). Editing never requires re-loggin
 `delete_*` is **permanent** — confirm the specific entry with the user before
 deleting (echo back what it is), the same way you confirm before writing.
 
-## 7. Confirm before writing
+## 7. Medication is a two-step write
+
+Medicines are saved per child before they can be logged. Call
+**`list_medicine_types`** to see them; **`log_medication`** takes a saved type's
+`id` or its name (case-insensitive) and **fails** if it matches nothing — it never
+creates one implicitly, because a typo would become a permanent medicine.
+
+If the user names something that isn't saved, ask before adding it, then call
+**`create_medicine_type`** and log against the returned id.
+
+- `amount` requires `units` (`ml`, `oz`, `tsp`, `drops`). Omit both when the user
+  just says "gave her the medicine".
+- Never calculate or suggest a dose — record only what the user states, and send
+  dosing questions to a doctor, pharmacist, or the product label.
+- "When was the last dose?" → `get_medication_history` and read the newest entry.
+
+## 8. Confirm before writing
 
 Writes go to the user's **real** Huckleberry account. Before any `log_*` call,
 echo back the child, the resolved time, and the values, then make the call.
@@ -92,6 +108,7 @@ echo back the child, the resolved time, and the values, then make the call.
 - "120ml formula bottle just now" → `log_bottle` { amount: 120, units: "ml", bottle_type: "Formula", start: now }.
 - "Poo diaper, medium, yellow" → `log_diaper` { mode: "poo", poo_amount: "medium", color: "yellow", start: now }.
 - "Weighed 3.4 kg today" → `log_growth` { weight: 3.4, units: "metric", start: now }.
+- "Gave her 2.5ml of Tylenol just now" → `log_medication` { medicine: "Tylenol", amount: 2.5, units: "ml", start: now }.
 - "How much did she sleep yesterday?" → `get_sleep_history`, filter to yesterday, sum durations.
 
 The server also exposes MCP **prompts** for the same flows: `huckleberry_usage`,

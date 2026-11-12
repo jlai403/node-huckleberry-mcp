@@ -25,6 +25,10 @@ import {
   logGrowth,
   getGrowthHistory,
   editGrowth,
+  createMedicineType,
+  listMedicineTypes,
+  logMedication,
+  getMedicationHistory,
 } from "../client/index.js";
 
 /**
@@ -352,5 +356,49 @@ describe.skipIf(!enabled)("live write round-trip (log_* + edit_* + delete)", () 
         expectedNotes: edited,
       },
     );
+  });
+
+  // Medication has no edit/delete tool yet, so this is a create → log → read
+  // round-trip with explicit cleanup of both the dose and the medicine type.
+  it("medication: create type, log a dose, read it back", { timeout: 30000 }, async () => {
+    const client = makeClient();
+    let cid: string | undefined;
+    let typeId: string | undefined;
+    let entryId: string | undefined;
+    try {
+      cid = await resolveLiveChildUid(client);
+      const name = `ZZ-med-${Date.now()}`;
+      typeId = await createMedicineType(client, cid, { name });
+
+      const start = uniqueStart();
+      const logged = await logMedication(client, cid, name, {
+        time: new Date(start * 1000),
+        amount: 2.5,
+        units: "ml",
+        notes: "medication round-trip note",
+      });
+      entryId = logged.entryId;
+
+      const entry = (await getMedicationHistory(client, cid, { limit: 20 })).find(
+        (e) => e.start === start,
+      );
+      expect(entry, `dose with start=${start} should have been written`).toBeDefined();
+      expect(entry?.medication_name).toBe(name);
+      expect(entry?.amount).toBe(2.5);
+      expect(entry?.units).toBe("ml");
+      expect(entry?.notes).toBe("medication round-trip note");
+
+      const type = (await listMedicineTypes(client, cid)).find((t) => t.name === name);
+      expect(type?.lastTake?.amount).toBe(2.5);
+      expect(type?.lastTake?.units).toBe("ml");
+    } finally {
+      if (cid && entryId) {
+        await client.deleteDoc("health", cid, "data", entryId).catch(() => undefined);
+      }
+      if (cid && typeId) {
+        await client.deleteDoc("health", cid, "types", typeId).catch(() => undefined);
+      }
+      await client.signOut();
+    }
   });
 });

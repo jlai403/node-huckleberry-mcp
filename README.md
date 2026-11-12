@@ -115,9 +115,7 @@ After updating the config, restart Claude Desktop. The Huckleberry tools will ap
 
 ## Tools
 
-The server exposes **29 tools** across 6 categories. (Active-session sleep/feed
-timers — `start_sleep`, `pause_feeding`, etc. — are not implemented; use the
-explicit `log_*` tools to record completed events.)
+The server exposes **63 tools** across 8 categories.
 
 ### Child Management (2)
 
@@ -175,6 +173,18 @@ the set was chosen — adopted from the legacy port, not yet live-confirmed.
 | `get_growth_history` | `child_uid`, `limit?`                                                                      | Growth history (incl. `id`)                 |
 | `edit_growth`        | `child_uid`, `entry_id`, + any of `start`/`weight`/`height`/`head`/`units`/`notes`         | Edit an existing growth measurement         |
 | `delete_growth`      | `child_uid`, `entry_id`                                                                    | Permanently delete a growth measurement     |
+
+### Medication (4)
+
+Medicines are saved per child (`list_medicine_types`), and a dose is logged
+against a saved one — `log_medication` never creates a type implicitly.
+
+| Tool                     | Input                                                                         | Purpose                                     |
+| ------------------------ | ----------------------------------------------------------------------------- | ------------------------------------------- |
+| `list_medicine_types`    | `child_uid`                                                                   | Saved medicines + their last dose           |
+| `create_medicine_type`   | `child_uid`, `name`                                                           | Add a medicine to the child's saved list    |
+| `log_medication`         | `child_uid`, `medicine` (id or name), `start?`, `amount?`, `units?`, `notes?` | Log a dose (`units` required with `amount`) |
+| `get_medication_history` | `child_uid`, `limit?`                                                         | Doses, most recent first (incl. `id`)       |
 
 ### Solids — custom foods (3)
 
