@@ -2,6 +2,16 @@ name: Publish image
 
 # Builds the streamable-HTTP image and pushes it to GHCR, tagged from the git
 # tag. Dispatchable so a failed release can be rebuilt without moving the tag.
+#
+# Two tags per release: `vX.Y.Z` (immutable, the only tag built and the only
+# one trivy grades) and `vX` (rolling inside that major line). The stack pins
+# `vX`, so a 0.x release reaches the host on the next stack deploy with no
+# compose edit; a `v1` will mean a breaking change and needs one. `latest`
+# rides along.
+#
+# The rolling aliases are moved *after* the scan, by retagging the scanned
+# digest: put them in the build's tag list instead and a CRITICAL image is
+# `v0` for the half-minute until trivy fails the run.
 on:
   push:
     tags: ["v*"]
@@ -44,7 +54,7 @@ jobs:
           esac
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "minor=${version%.*}" >> "$GITHUB_OUTPUT"
+          echo "major=${version%%.*}" >> "$GITHUB_OUTPUT"
 
       - uses: actions/checkout@v6
         with:
@@ -54,25 +64,18 @@ jobs:
           persist-credentials: false
 
       # Floating tags move forward only. Rebuilding an old tag — or a release
-      # redone after a failure — must not drag :latest or :0.7 back to an older
+      # redone after a failure — must not drag v0 or latest back to an older
       # image, which is the one way an alias becomes worse than no alias.
-      - name: Decide which aliases may move
+      - name: Decide whether the aliases may move
         id: aliases
         run: |
           tag="${{ steps.ref.outputs.tag }}"
-          minor="${{ steps.ref.outputs.minor }}"
           newest="$(git tag --sort=-v:refname | head -1)"
-          newest_minor="$(git tag --sort=-v:refname | grep -E "^v${minor//./\\.}\.[0-9]+$" | head -1)"
-          echo "newest=$newest newest_minor=$newest_minor"
+          echo "newest=$newest"
           if [ "$tag" = "$newest" ]; then
-            echo "latest=true" >> "$GITHUB_OUTPUT"
+            echo "rolling=true" >> "$GITHUB_OUTPUT"
           else
-            echo "latest=false" >> "$GITHUB_OUTPUT"
-          fi
-          if [ "$tag" = "$newest_minor" ]; then
-            echo "minor=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "minor=false" >> "$GITHUB_OUTPUT"
+            echo "rolling=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Lint the Dockerfile
@@ -88,22 +91,11 @@ jobs:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Assemble tags
+      - name: Assemble the image reference
         id: tags
         run: |
           # GHCR rejects uppercase in an image reference.
-          image="ghcr.io/${GITHUB_REPOSITORY,,}"
-          {
-            echo "tags<<EOF"
-            echo "${image}:${{ steps.ref.outputs.version }}"
-            if [ "${{ steps.aliases.outputs.minor }}" = "true" ]; then
-              echo "${image}:${{ steps.ref.outputs.minor }}"
-            fi
-            if [ "${{ steps.aliases.outputs.latest }}" = "true" ]; then
-              echo "${image}:latest"
-            fi
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
+          echo "image=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
 
       - name: Build and push
         id: build
@@ -113,7 +105,7 @@ jobs:
           # The consuming host is x86_64; arm64 was ~10 minutes of QEMU per build.
           platforms: linux/amd64
           push: true
-          tags: ${{ steps.tags.outputs.tags }}
+          tags: ${{ steps.tags.outputs.image }}:${{ steps.ref.outputs.version }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.version=${{ steps.ref.outputs.version }}
@@ -140,6 +132,17 @@ jobs:
             --exit-code 1 \
             "ghcr.io/${{ github.repository }}@${{ steps.build.outputs.digest }}"
 
+      # Registry-side retag of the digest the scan just graded: no rebuild, no
+      # pull. This is the step that makes the stack's `v0` pin safe.
+      - name: Move the rolling aliases
+        if: steps.aliases.outputs.rolling == 'true'
+        run: |
+          image="${{ steps.tags.outputs.image }}"
+          source="${image}:${{ steps.ref.outputs.version }}"
+          for alias in "v${{ steps.ref.outputs.major }}" latest; do
+            docker buildx imagetools create -t "${image}:${alias}" "${source}"
+          done
+
       - name: Summarise
         run: |
           {
@@ -150,7 +153,7 @@ jobs:
             echo "| image | \`ghcr.io/${{ github.repository }}\` |"
             echo "| version | \`${{ steps.ref.outputs.version }}\` |"
             echo "| digest | \`${{ steps.build.outputs.digest }}\` |"
-            echo "| aliases | \`latest=${{ steps.aliases.outputs.latest }}\` \`${{ steps.ref.outputs.minor }}=${{ steps.aliases.outputs.minor }}\` |"
+            echo "| aliases | \`v${{ steps.ref.outputs.major }}\` + \`latest\` moved: \`${{ steps.aliases.outputs.rolling }}\` |"
             echo
             echo "GHCR packages are private by default: flip visibility, or give the consumer a pull token."
           } >> "$GITHUB_STEP_SUMMARY"
