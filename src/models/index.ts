@@ -51,5 +51,13 @@ export type { DiaperIntervalParsed } from "./diaper.js";
 export { GrowthEntry } from "./growth.js";
 export type { GrowthEntryParsed } from "./growth.js";
 
+export { MEDICATION_UNITS, MedicationEntry, MedicineLastTake, MedicineType } from "./medication.js";
+export type {
+  MedicationEntryParsed,
+  MedicationUnits,
+  MedicineLastTakeParsed,
+  MedicineTypeParsed,
+} from "./medication.js";
+
 export { CustomFood } from "./food.js";
 export type { CustomFoodParsed } from "./food.js";

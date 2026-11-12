@@ -1,16 +1,7 @@
-import {
-  collection,
-  addDoc,
-  doc,
-  updateDoc,
-  deleteDoc,
-  getDocs,
-  query,
-  orderBy,
-  limit,
-} from "firebase/firestore";
+import { collection, addDoc, doc, updateDoc, deleteDoc } from "firebase/firestore";
 import type { HuckleberryClient } from "./HuckleberryClient.js";
 import { GrowthEntry, type GrowthEntryParsed } from "../models/index.js";
+import { readHealthRows } from "./healthData.js";
 
 export type GrowthUnits = "metric" | "imperial";
 
@@ -73,16 +64,8 @@ export async function getGrowthHistory(
   childUid: string,
   options: GrowthHistoryOptions = {},
 ): Promise<(GrowthEntryParsed & { id: string })[]> {
-  await client.connect();
-  const db = client.getFirestore();
-  const col = collection(db, "health", childUid, "data");
-  const q = query(col, orderBy("start", "desc"), limit(options.limit ?? 50));
-  const snap = await getDocs(q);
-  // health/{cid}/data may hold non-growth health entries; keep only growth.
-  return snap.docs
-    .map((d) => ({ id: d.id, data: d.data() }))
-    .filter((d) => (d.data as { mode?: unknown }).mode === "growth")
-    .map((d) => ({ id: d.id, ...GrowthEntry.parse(d.data) }));
+  const rows = await readHealthRows(client, childUid, "growth", options.limit ?? 50);
+  return rows.map((row) => ({ id: row.id, ...GrowthEntry.parse(row.data) }));
 }
 
 /** Returns the most recent growth entry (incl. `id`), or null if none exist. */

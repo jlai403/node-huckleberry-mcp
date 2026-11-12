@@ -6,4 +6,5 @@ export * from "./feedOps.js";
 export * from "./activityOps.js";
 export * from "./diaperOps.js";
 export * from "./growthOps.js";
+export * from "./medicationOps.js";
 export * from "./solidsOps.js";

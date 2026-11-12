@@ -11,6 +11,7 @@ import "../tools/sleep.js";
 import "../tools/feeding.js";
 import "../tools/diaper.js";
 import "../tools/growth.js";
+import "../tools/medication.js";
 import "../tools/solids.js";
 import "../tools/activity.js";
 import "../tools/growthPercentiles.js";

@@ -81,13 +81,10 @@ Every parent `prefs` also carries `timestamp:{ seconds:<float> }` and
 
 First real prober sweep. What it settled:
 
-- **`health/{cid}` prefs contains `lastMedication: null`** ✅ — strong evidence
-  **medication is stored in `health/{cid}/data`** (the same subcollection as growth,
-  discriminated by `mode`), _not_ a separate `medication/` collection. Our
-  `getGrowthHistory` already filters `mode === "growth"`, so medication rows are
-  correctly ignored today — but a `log_medication`/`get_medication` feature should
-  target `health/{cid}/data` with its own `mode`. **Still to capture:** the actual
-  `mode` value and field shape (log a medication in the app, then re-probe).
+- **Medication lives in `health/{cid}/data` with `mode: "medication"`** ✅ —
+  confirmed 2026-11-12 by a written round-trip against the ZZ Test child, matching
+  `py-huckleberry-api`'s implementation. Not a separate `medication/` collection.
+  The shapes are under [Medication](#medication) below.
 - **`types/{cid}` parent doc is absent and `types/{cid}/custom` is empty** ✅ — the
   account has no custom foods. Confirms the parent doc is a "phantom parent" (the
   subcollection is what matters), and means the B5 custom-food shape is still
@@ -132,6 +129,53 @@ npm run inspect:schema` → start a sleep in the app, leave it running → `DIFF
   color/consistency from the app, dump `diaper/{cid}/intervals`, and update this
   entry + `DIAPER_COLORS`/`DIAPER_CONSISTENCIES` from the observed strings.
 
+## Medication
+
+Confirmed 2026-11-12 (written through `logMedication`, read back through the
+prober). Mirrors `py-huckleberry-api`, which the app has been verified against.
+
+Selectable medicines — `health/{cid}/types/{type_id}`:
+
+```json
+{
+  "_id": "<type_id>",
+  "active": true,
+  "mode": "medication",
+  "name": "Tylenol",
+  "lastTake": { "amount": 2.5, "reminderType": "at", "units": "ml" }
+}
+```
+
+`lastTake` is merged on after the type's first dose; the type doc itself is
+created with only `_id`, `active`, `mode`, `name`.
+
+A dose — `health/{cid}/data/{entry_id}`:
+
+```json
+{
+  "mode": "medication",
+  "start": 1794519383.613,
+  "lastUpdated": 1794519383.62,
+  "offset": -360,
+  "medication_id": "<type_id>",
+  "medication_name": "Tylenol",
+  "amount": 2.5,
+  "units": "ml",
+  "notes": ""
+}
+```
+
+- `units` is one of `ml | oz | tsp | drops`, and is **omitted** when no amount was
+  measured (`amount` is then `0`). `notes` is `""`, not null.
+- `health/{cid}.prefs.lastMedication` mirrors the newest dose plus
+  `_id`, `type: "health"`, `isNight`, `multientry_key` — and only moves when the
+  logged dose is not older than the one already summarised.
+
+Because growth and medication share `health/{cid}/data`, both readers filter on
+`mode` after fetching a page: Firestore refuses `where` + `orderBy` on different
+fields without a composite index, and this project's indexes are not ours to
+create.
+
 ## Candidates to confirm (❓)
 
 Guessed from the app's features / the Python reference; **not yet probed**. The
@@ -140,15 +184,15 @@ sub being empty is **not** proof the feature doesn't exist (it may live under a
 different path, e.g. inside `health/{cid}/data` behind a `mode`). Confirm the real
 path/sub before trusting.
 
-| Candidate path                             | Hypothesis                                                                                                                                                                                  |
-| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `health/{cid}/data` (other `mode`s)        | **Most likely home** for medication / temperature / symptom — `lastMedication` in `health` prefs points here. Capture the `mode` values by logging one of each in the app, then re-probing. |
-| `medication/{cid}`                         | ⛔ denied in the sweep — probably not a real top-level collection (see findings)                                                                                                            |
-| `temperature/{cid}`                        | ⛔ denied — same                                                                                                                                                                            |
-| `measurement/{cid}`                        | ⛔ denied — same                                                                                                                                                                            |
-| `milestone/{cid}`                          | ⛔ denied — same                                                                                                                                                                            |
-| `activity/{cid}`                           | ⛔ denied — same                                                                                                                                                                            |
-| `symptom/{cid}`                            | ⛔ denied — same                                                                                                                                                                            |
-| `journal`/`note`/`photo`/`vaccine`/`teeth` | other app sections — paths unknown; likely also `mode`s rather than collections                                                                                                             |
+| Candidate path                             | Hypothesis                                                                                                                                      |
+| ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `health/{cid}/data` (other `mode`s)        | Medication ✅ confirmed (`mode: "medication"`). Temperature / symptom are guessed to live here too — log one of each in the app, then re-probe. |
+| `medication/{cid}`                         | ⛔ denied in the sweep — probably not a real top-level collection (see findings)                                                                |
+| `temperature/{cid}`                        | ⛔ denied — same                                                                                                                                |
+| `measurement/{cid}`                        | ⛔ denied — same                                                                                                                                |
+| `milestone/{cid}`                          | ⛔ denied — same                                                                                                                                |
+| `activity/{cid}`                           | ⛔ denied — same                                                                                                                                |
+| `symptom/{cid}`                            | ⛔ denied — same                                                                                                                                |
+| `journal`/`note`/`photo`/`vaccine`/`teeth` | other app sections — paths unknown; likely also `mode`s rather than collections                                                                 |
 
 When one is confirmed, move it up into the tables above with its captured shape.
