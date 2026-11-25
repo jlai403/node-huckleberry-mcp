@@ -556,3 +556,41 @@ export async function listActivityIntervals(
 
   return [...byId.values()].sort((a, b) => a.start - b.start);
 }
+
+/**
+ * The single most recent activity entry for a mode, across both regular and
+ * compacted (multi) documents. Returns null when none exists.
+ */
+export async function getLastActivity(
+  client: HuckleberryClient,
+  childUid: string,
+  mode: string,
+): Promise<(ActivityIntervalParsed & { id: string }) | null> {
+  await client.connect();
+  const db = client.getFirestore();
+  const intervals = collection(db, "activities", childUid, "intervals");
+
+  const regular = await getDocs(intervals);
+  const containers = await getDocs(query(intervals, where("multi", "==", true)));
+
+  let best: (ActivityIntervalParsed & { id: string }) | null = null;
+  for (const snap of regular.docs) {
+    const data = snap.data();
+    if (!data || data.multi) continue;
+    if (data.mode !== mode) continue;
+    const parsed = ActivityInterval.safeParse(data);
+    if (!parsed.success) continue;
+    if (!best || parsed.data.start > best.start) best = { id: snap.id, ...parsed.data };
+  }
+  for (const snap of containers.docs) {
+    const container = snap.data();
+    const data = (container?.data ?? {}) as Record<string, unknown>;
+    for (const [id, raw] of Object.entries(data)) {
+      if (!raw || (raw as { mode?: unknown }).mode !== mode) continue;
+      const parsed = ActivityInterval.safeParse(raw);
+      if (!parsed.success) continue;
+      if (!best || parsed.data.start > best.start) best = { id, ...parsed.data };
+    }
+  }
+  return best;
+}

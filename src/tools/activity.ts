@@ -3,6 +3,7 @@ import { registerTool } from "../server/server.js";
 import { getClient } from "../server/auth.js";
 import {
   listActivityIntervals,
+  getLastActivity,
   getActivityDoc,
   startActivity,
   pauseActivity,
@@ -230,6 +231,23 @@ registerTool(
     });
     return {
       content: [{ type: "text", text: JSON.stringify({ activity_id: id }, null, 2) }],
+    };
+  },
+);
+
+// get_last_activity — most recent entry for a mode, across regular + compacted docs
+registerTool(
+  "get_last_activity",
+  "Return the most recent activity entry for a mode (e.g. bath) across the full history, including entries Huckleberry has compacted into container documents. Returns null when none exists.",
+  z.object({
+    child_uid: z.string().min(1, "child_uid is required"),
+    mode: modeSchema,
+  }),
+  async (input) => {
+    const client = await getClient();
+    const entry = await getLastActivity(client, input.child_uid, input.mode as Mode);
+    return {
+      content: [{ type: "text", text: JSON.stringify({ entry }, null, 2) }],
     };
   },
 );
