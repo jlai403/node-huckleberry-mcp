@@ -74,6 +74,9 @@ jobs:
           echo "newest=$newest"
           if [ "$tag" = "$newest" ]; then
             echo "rolling=true" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event_name }}" = "push" ]; then
+            echo "::error::tag $tag is not the newest tag ($newest) — bump package.json and retag; refusing to ship a stale alias"
+            exit 1
           else
             echo "rolling=false" >> "$GITHUB_OUTPUT"
           fi

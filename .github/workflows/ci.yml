@@ -12,6 +12,18 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Version must not be older than the newest tag
+        run: |
+          newest="$(git tag --sort=-v:refname | head -1)"
+          current="v$(node -p "require('./package.json').version")"
+          [ -n "$newest" ] || exit 0
+          if [ "$(printf '%s\n%s\n' "$newest" "$current" | sort -V | tail -1)" != "$current" ]; then
+            echo "::error::package.json is $current but the newest tag is $newest — bump the version before merging"
+            exit 1
+          fi
 
       - name: Use Node.js 24
         uses: actions/setup-node@v4
