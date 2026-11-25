@@ -494,6 +494,8 @@ export interface ActivityHistoryOptions {
   start: number;
   /** Range end (epoch seconds, exclusive). */
   end: number;
+  /** Optional activity mode to keep (e.g. "bath"); applied client-side. */
+  mode?: string;
 }
 
 /**
@@ -528,11 +530,17 @@ export async function listActivityIntervals(
   // and filter client-side, since their `start` values are not top-level.
   const containers = await getDocs(query(intervals, where("multi", "==", true)));
 
+  const mode = options.mode;
+  const keep = (entry: { mode?: string }) => mode === undefined || entry.mode === mode;
+
   const byId = new Map<string, ActivityIntervalParsed & { id: string }>();
   for (const snap of regular.docs) {
     const data = snap.data();
     if (!data || data.multi) continue;
-    byId.set(snap.id, { id: snap.id, ...ActivityInterval.parse(data) });
+    const parsed = ActivityInterval.safeParse(data);
+    if (!parsed.success) continue;
+    if (!keep(parsed.data)) continue;
+    byId.set(snap.id, { id: snap.id, ...parsed.data });
   }
   for (const snap of containers.docs) {
     const container = snap.data();
@@ -541,7 +549,8 @@ export async function listActivityIntervals(
       const start = Number((raw as { start?: unknown })?.start);
       if (!Number.isFinite(start) || start < options.start || start >= options.end) continue;
       const parsed = ActivityInterval.safeParse(raw);
-      if (parsed.success) byId.set(id, { id, ...parsed.data });
+      if (!parsed.success || !keep(parsed.data)) continue;
+      byId.set(id, { id, ...parsed.data });
     }
   }
 

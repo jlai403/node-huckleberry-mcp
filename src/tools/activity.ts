@@ -242,12 +242,14 @@ registerTool(
     child_uid: z.string().min(1, "child_uid is required"),
     start: z.number().min(0, "range start is required (epoch seconds)"),
     end: z.number().min(0, "range end is required (epoch seconds)"),
+    mode: z.enum(ACTIVITY_MODES).optional().describe("Keep only this activity mode (e.g. bath)"),
   }),
   async (input) => {
     const client = await getClient();
     const events = await listActivityIntervals(client, input.child_uid, {
       start: input.start,
       end: input.end,
+      mode: input.mode,
     });
     return {
       content: [{ type: "text", text: JSON.stringify({ events }, null, 2) }],

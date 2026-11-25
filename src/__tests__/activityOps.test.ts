@@ -395,4 +395,23 @@ describe("listActivityIntervals", () => {
     const events = await listActivityIntervals(client, "cid", { start, end });
     expect(events).toHaveLength(1);
   });
+
+  it("filters by mode when provided", async () => {
+    const start = Date.now() / 1000 - 3600;
+    const end = Date.now() / 1000;
+    const regularSnap = {
+      docs: [
+        { id: "a", data: () => ({ mode: "bath", start }) },
+        { id: "b", data: () => ({ mode: "tummyTime", start: start + 10 }) },
+      ],
+    };
+    const containerSnap = { docs: [] };
+    mockGetDocs
+      .mockResolvedValueOnce(regularSnap as never)
+      .mockResolvedValueOnce(containerSnap as never);
+
+    const events = await listActivityIntervals(client, "cid", { start, end, mode: "bath" });
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ id: "a", mode: "bath" });
+  });
 });
