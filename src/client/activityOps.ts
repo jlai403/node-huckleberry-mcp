@@ -497,8 +497,13 @@ export interface ActivityHistoryOptions {
 }
 
 /**
- * Activity intervals in a date range; `multi` container docs are skipped
- * (upstream behavior). Timestamps come back epoch seconds.
+ * Activity intervals in a date range. Timestamps come back epoch seconds.
+ *
+ * Huckleberry keeps the most recent entries as individual documents and
+ * compacts older ones into a single `multi: true` container document (see
+ * `data` map). That container is queried separately and its entries are
+ * merged here, so a range that predates the compaction boundary is not
+ * reported as empty.
  */
 export async function listActivityIntervals(
   client: HuckleberryClient,
@@ -508,6 +513,8 @@ export async function listActivityIntervals(
   await client.connect();
   const db = client.getFirestore();
   const intervals = collection(db, "activities", childUid, "intervals");
+
+  // Regular (per-entry) documents, range-filtered server-side.
   const regular = await getDocs(
     query(
       intervals,
@@ -517,13 +524,26 @@ export async function listActivityIntervals(
     ),
   );
 
-  const events: (ActivityIntervalParsed & { id: string })[] = [];
+  // Container documents hold the compacted (older) entries; pull every one
+  // and filter client-side, since their `start` values are not top-level.
+  const containers = await getDocs(query(intervals, where("multi", "==", true)));
+
+  const byId = new Map<string, ActivityIntervalParsed & { id: string }>();
   for (const snap of regular.docs) {
     const data = snap.data();
     if (!data || data.multi) continue;
-    events.push({ id: snap.id, ...ActivityInterval.parse(data) });
+    byId.set(snap.id, { id: snap.id, ...ActivityInterval.parse(data) });
+  }
+  for (const snap of containers.docs) {
+    const container = snap.data();
+    const data = (container?.data ?? {}) as Record<string, unknown>;
+    for (const [id, raw] of Object.entries(data)) {
+      const start = Number((raw as { start?: unknown })?.start);
+      if (!Number.isFinite(start) || start < options.start || start >= options.end) continue;
+      const parsed = ActivityInterval.safeParse(raw);
+      if (parsed.success) byId.set(id, { id, ...parsed.data });
+    }
   }
 
-  // Multi-doc entries (interval groups) are skipped, matching upstream.
-  return events;
+  return [...byId.values()].sort((a, b) => a.start - b.start);
 }
