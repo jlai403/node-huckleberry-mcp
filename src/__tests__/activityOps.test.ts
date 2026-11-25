@@ -370,7 +370,9 @@ describe("listActivityIntervals", () => {
         },
       ],
     };
-    mockGetDocs.mockResolvedValueOnce(regularSnap as never).mockResolvedValueOnce(containerSnap as never);
+    mockGetDocs
+      .mockResolvedValueOnce(regularSnap as never)
+      .mockResolvedValueOnce(containerSnap as never);
 
     const events = await listActivityIntervals(client, "cid", { start, end });
     expect(events.map((e) => e.id)).toEqual(["a", "in"]);
@@ -383,8 +385,12 @@ describe("listActivityIntervals", () => {
     const start = Date.now() / 1000 - 3600;
     const end = Date.now() / 1000;
     const regularSnap = { docs: [{ id: "a", data: () => ({ mode: "bath", start }) }] };
-    const containerSnap = { docs: [{ id: "c", data: () => ({ multi: true, data: { a: { mode: "bath", start } } }) }] };
-    mockGetDocs.mockResolvedValueOnce(regularSnap as never).mockResolvedValueOnce(containerSnap as never);
+    const containerSnap = {
+      docs: [{ id: "c", data: () => ({ multi: true, data: { a: { mode: "bath", start } } }) }],
+    };
+    mockGetDocs
+      .mockResolvedValueOnce(regularSnap as never)
+      .mockResolvedValueOnce(containerSnap as never);
 
     const events = await listActivityIntervals(client, "cid", { start, end });
     expect(events).toHaveLength(1);
