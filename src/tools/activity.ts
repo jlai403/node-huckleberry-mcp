@@ -234,10 +234,10 @@ registerTool(
   },
 );
 
-// list_activity_intervals — range query (multi docs skipped)
+// list_activity_intervals — range query (includes compacted `multi` containers)
 registerTool(
   "list_activity_intervals",
-  "List activity history entries within a time range (start inclusive, end exclusive; epoch seconds)",
+  "List activity history entries within a time range (start inclusive, end exclusive; epoch seconds). Includes entries Huckleberry has compacted into container documents.",
   z.object({
     child_uid: z.string().min(1, "child_uid is required"),
     start: z.number().min(0, "range start is required (epoch seconds)"),

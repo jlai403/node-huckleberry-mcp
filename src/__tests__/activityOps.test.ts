@@ -344,21 +344,49 @@ describe("logActivity", () => {
 });
 
 describe("listActivityIntervals", () => {
-  it("queries the range and skips multi container docs", async () => {
+  it("queries the range and merges multi container entries in range", async () => {
     const start = Date.now() / 1000 - 3600;
     const end = Date.now() / 1000;
-    const snap = {
+    const inRange = start + 300;
+    const outOfRange = start - 1000;
+    const regularSnap = {
       docs: [
-        { id: "a", id2: null, data: () => ({ mode: "bath", start }) },
+        { id: "a", data: () => ({ mode: "bath", start }) },
         { id: "b", data: () => ({ multi: true }) },
       ],
     };
-    mockGetDocs.mockResolvedValueOnce(snap as never);
+    const containerSnap = {
+      docs: [
+        {
+          id: "c",
+          data: () => ({
+            multi: true,
+            data: {
+              in: { mode: "tummyTime", start: inRange, duration: 100 },
+              out: { mode: "bath", start: outOfRange, duration: 200 },
+              bad: { mode: "bath", start: "not-a-number" },
+            },
+          }),
+        },
+      ],
+    };
+    mockGetDocs.mockResolvedValueOnce(regularSnap as never).mockResolvedValueOnce(containerSnap as never);
+
+    const events = await listActivityIntervals(client, "cid", { start, end });
+    expect(events.map((e) => e.id)).toEqual(["a", "in"]);
+    expect(events.find((e) => e.id === "in")).toMatchObject({ mode: "tummyTime", start: inRange });
+    // range query built via where(start>=) + where(start<)
+    expect(mockWhere).toHaveBeenCalledTimes(3);
+  });
+
+  it("dedupes an entry present in both a regular doc and a container", async () => {
+    const start = Date.now() / 1000 - 3600;
+    const end = Date.now() / 1000;
+    const regularSnap = { docs: [{ id: "a", data: () => ({ mode: "bath", start }) }] };
+    const containerSnap = { docs: [{ id: "c", data: () => ({ multi: true, data: { a: { mode: "bath", start } } }) }] };
+    mockGetDocs.mockResolvedValueOnce(regularSnap as never).mockResolvedValueOnce(containerSnap as never);
 
     const events = await listActivityIntervals(client, "cid", { start, end });
     expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({ id: "a", mode: "bath" });
-    // range query built via where(start>=) + where(start<)
-    expect(mockWhere).toHaveBeenCalledTimes(2);
   });
 });
